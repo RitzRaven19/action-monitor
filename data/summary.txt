@@ -1,0 +1,3 @@
+- Migrate the reporting pipeline to the new warehouse schema by end of quarter, addressing legacy dashboard compatibility and scheduling deprecation after migration.
+- Data platform team is ~60% complete; infra spend is 8% under budget this quarter.
+- Q4 headcount requests: 2 backend engineers and 1 data analyst.

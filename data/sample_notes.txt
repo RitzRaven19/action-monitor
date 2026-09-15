@@ -1,0 +1,11 @@
+Q3 Planning Notes
+-----------------
+- Migrate the reporting pipeline to the new warehouse schema by end of quarter.
+- Owner: data platform team. Status: in progress, ~60% complete.
+- Risk: legacy dashboards still read from the old schema; needs a compatibility view.
+- Action item: schedule a deprecation date for the old schema once dashboards are migrated.
+
+Budget Summary
+--------------
+- Infra spend is tracking 8% under budget this quarter.
+- Headcount requests for Q4: 2 backend engineers, 1 data analyst.
