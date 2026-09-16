@@ -127,7 +127,12 @@ part" problem Section 5 of the plan called out in advance.
   model** — it counts `out_of_scope_benign` flags in a run and escalates past a fixed threshold
   (3, by default). It has no notion of *which* patterns of small actions are meaningfully
   converging toward something (e.g. progressively broader file access vs. unrelated one-off
-  peeks) — that's a real limitation, not a solved problem, and a natural next increment.
+  peeks) — that's a real limitation, not a solved problem. `docs/EVASION_FINDINGS.md` reports two
+  live experiments confirming this: staying under the per-run threshold evades detection entirely
+  (an unfixed, honest limitation of any fixed count), and spreading the same footprint across
+  separate turns evades the per-run check specifically (a real structural gap, closed there by a
+  new session-level aggregation pass — which then has the identical shape of limitation one level
+  further out).
 - **Does not use model internals or activations** — deliberately black-box and behavior-level,
   which is what makes it buildable as an external, independent project without access to a
   frontier lab's internal tooling.
