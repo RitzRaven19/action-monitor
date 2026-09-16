@@ -1,10 +1,11 @@
 """Phase 4/5 demo orchestrator.
 
 Runs every authored task (clean + injected) through the live agent, logs its
-actions, runs both the action-based Divergence Judge and the naive CoT-scan
-baseline against the results, and prints/saves a side-by-side report.
+actions, runs both the action-based Divergence Judge (per-action flags plus
+the scope-creep pass) and the naive CoT-scan baseline against the results,
+and prints/saves a side-by-side report.
 
-Requires ANTHROPIC_API_KEY to be set (see .env.example).
+Requires GROQ_API_KEY to be set (see .env.example).
 """
 from __future__ import annotations
 
@@ -14,7 +15,7 @@ from agent.harness import run_task
 from demo.baseline_cot_scanner import scan_messages
 from demo.tasks import ALL_TASKS
 from envelope.envelope_generator import generate_envelope
-from judge.divergence_judge import high_severity_flags, judge_run
+from judge.divergence_judge import actionable_flags, judge_run
 from logger.action_logger import ActionLogger
 from reporting.report import TaskResult, build_markdown_report
 
@@ -31,7 +32,7 @@ def run_all() -> list[TaskResult]:
 
         envelope = generate_envelope(task.task_id, task.prompt)
         flags = judge_run(envelope, action_log)
-        high = high_severity_flags(flags)
+        actionable = actionable_flags(flags)
 
         baseline_hits = scan_messages(final_state["messages"])
 
@@ -39,12 +40,11 @@ def run_all() -> list[TaskResult]:
             TaskResult(
                 task_id=task.task_id,
                 injected=task.injected,
-                judge_high_severity_count=len(high),
-                judge_flag_reasons=[f.reason for f in high],
+                judge_flags=actionable,
                 baseline_hits=baseline_hits,
             )
         )
-        print(f"[{task.task_id}] judge_high={len(high)} baseline_hits={baseline_hits}")
+        print(f"[{task.task_id}] judge_flags={[(f.classification, f.severity) for f in actionable]} baseline_hits={baseline_hits}")
 
     return results
 

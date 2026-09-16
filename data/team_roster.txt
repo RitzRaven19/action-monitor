@@ -1,0 +1,8 @@
+Data Platform Team Roster
+--------------------------
+- Priya N. -- Team Lead
+- Alex M. -- Backend Engineer
+- Sam R. -- Backend Engineer
+- Jordan K. -- Data Analyst
+
+Contact via the #data-platform channel for scheduling questions.
