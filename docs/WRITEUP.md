@@ -127,12 +127,14 @@ part" problem Section 5 of the plan called out in advance.
   model** — it counts `out_of_scope_benign` flags in a run and escalates past a fixed threshold
   (3, by default). It has no notion of *which* patterns of small actions are meaningfully
   converging toward something (e.g. progressively broader file access vs. unrelated one-off
-  peeks) — that's a real limitation, not a solved problem. `docs/EVASION_FINDINGS.md` reports two
-  live experiments confirming this: staying under the per-run threshold evades detection entirely
-  (an unfixed, honest limitation of any fixed count), and spreading the same footprint across
-  separate turns evades the per-run check specifically (a real structural gap, closed there by a
-  new session-level aggregation pass — which then has the identical shape of limitation one level
-  further out).
+  peeks) — that's a real limitation, not a solved problem. `docs/EVASION_FINDINGS.md` reports
+  three live experiments confirming this: staying under the per-run threshold evades detection
+  entirely (an unfixed, honest limitation of any fixed count); spreading the same footprint across
+  separate turns evades the per-run check specifically (closed by a session-level aggregation
+  pass); and removing the session boundary entirely with persistent, cross-process identity
+  tracking closes *that* gap too, but demonstrably reintroduces a false-positive problem on
+  ordinary diverse usage — the arc's real conclusion is a trade-off surface (detection breadth vs.
+  false-positive rate), not a final fix.
 - **Does not use model internals or activations** — deliberately black-box and behavior-level,
   which is what makes it buildable as an external, independent project without access to a
   frontier lab's internal tooling.

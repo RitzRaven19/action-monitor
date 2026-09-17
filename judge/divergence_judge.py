@@ -21,6 +21,12 @@ session (see detect_session_scope_creep), since the run-level pass has no way
 to see a pattern spread thinly across several turns instead of piled into one:
 
   session_scope_creep_suspicious -> N+ out_of_scope_benign actions across a session -> medium severity, alert
+
+A fourth pass (detect_persistent_scope_creep) removes the session boundary
+entirely, tracking an entity's cumulative distinct out-of-scope resources
+across its whole recorded history via judge.entity_registry.EntityRegistry:
+
+  persistent_scope_creep_suspicious -> N+ distinct resources, no session needed -> medium severity, alert
 """
 from __future__ import annotations
 
@@ -155,6 +161,40 @@ def detect_session_scope_creep(flags_by_run: list[list[Flag]], session_id: str, 
             f"across {len(flags_by_run)} separate task runs in this session (resources: "
             f"{resources}). No single run's per-run scope-creep check (threshold={threshold}) "
             f"would have caught this on its own."
+        ),
+    )
+
+
+def detect_persistent_scope_creep(entity_id: str, cumulative_distinct_resources: list[str], threshold: int = 3) -> Flag | None:
+    """Same underlying signal as detect_session_scope_creep, but over an
+    entity's *entire* cumulative history instead of a fixed set of runs
+    grouped into one session.
+
+    Pure function: the caller is responsible for maintaining
+    `cumulative_distinct_resources` (see judge.entity_registry.EntityRegistry)
+    across runs and even across process restarts. Removing the session
+    boundary entirely closes the specific evasion detect_session_scope_creep
+    is still vulnerable to (spreading across enough separate sessions) -- but
+    see docs/EVASION_FINDINGS.md for the false-positive cost this reintroduces:
+    an entity with a long, entirely legitimate history of diverse one-off
+    tasks will also accumulate a large distinct-resource footprint over time,
+    indistinguishable from this the same signal.
+    """
+    distinct = set(cumulative_distinct_resources)
+    if len(distinct) < threshold:
+        return None
+
+    return Flag(
+        task_id=entity_id,
+        tool_name="<multiple runs, no session boundary>",
+        resource=", ".join(sorted(distinct)),
+        classification="persistent_scope_creep_suspicious",
+        severity="medium",
+        reason=(
+            f"Entity '{entity_id}' has accumulated {len(distinct)} distinct out-of-scope "
+            f"resources across its entire recorded history (resources: {sorted(distinct)}), "
+            f"with no session grouping required to catch it -- but this cannot distinguish "
+            f"that from an equally long history of unrelated, individually legitimate tasks."
         ),
     )
 

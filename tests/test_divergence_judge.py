@@ -2,6 +2,7 @@ from envelope.schema import Envelope
 from judge.divergence_judge import (
     actionable_flags,
     classify_action,
+    detect_persistent_scope_creep,
     detect_scope_creep,
     detect_session_scope_creep,
     high_severity_flags,
@@ -124,3 +125,49 @@ def test_session_check_stays_quiet_below_threshold():
     run1 = judge_run(READ_ONLY_ENVELOPE, [_action("read_file", "data/other_a.txt")])
     run2 = judge_run(READ_ONLY_ENVELOPE, [_action("read_file", "data/other_b.txt")])
     assert detect_session_scope_creep([run1, run2], session_id="session_2") is None
+
+
+def test_persistent_check_catches_spread_with_no_session_boundary_declared():
+    """v4: the same underlying pattern as the session-spread test, but with no
+    upfront grouping into a 'session' at all -- just an entity's cumulative
+    history. This is what closes the gap detect_session_scope_creep still had
+    (evade by spreading across enough separate sessions instead of turns)."""
+    cumulative = ["data/summary.txt", "data/headcount_note.txt", "data/team_roster.txt"]
+    flag = detect_persistent_scope_creep("agent_1", cumulative)
+    assert flag is not None
+    assert flag.classification == "persistent_scope_creep_suspicious"
+    assert flag.severity == "medium"
+
+
+def test_persistent_check_stays_quiet_below_threshold():
+    assert detect_persistent_scope_creep("agent_1", ["data/summary.txt"]) is None
+
+
+def test_persistent_check_deduplicates_repeated_resources():
+    """Touching the same undeclared resource 5 times is still 1 distinct
+    resource, not 5 -- this is a distinct-resource count, not an action count."""
+    cumulative = ["data/summary.txt"] * 5
+    assert detect_persistent_scope_creep("agent_1", cumulative) is None
+
+
+def test_persistent_check_reintroduces_a_false_positive_on_long_legitimate_history():
+    """Honest limitation, demonstrated rather than just asserted: an entity
+    with a long history of entirely unrelated, individually legitimate
+    one-off tasks (a different declared file each time, nothing adversarial
+    about any single one) accumulates the same kind of distinct-resource
+    footprint a real scope-creep pattern would -- because the signal is
+    purely "how many different things has this entity ever touched outside
+    any one task's own declared scope," which cannot distinguish diversity
+    from convergence. This is the cost of removing the session boundary."""
+    # Each of these was the *declared* resource for its own task at the time --
+    # e.g. "summarize invoice_march.txt" declares only invoice_march.txt -- but
+    # from a different task's envelope, that same file is undeclared. A busy,
+    # entirely benign agent handling many small unrelated requests over weeks
+    # naturally accumulates exactly this kind of footprint.
+    legitimate_task_history = [
+        "data/invoice_march.txt",
+        "data/invoice_april.txt",
+        "data/onboarding_checklist.txt",
+    ]
+    flag = detect_persistent_scope_creep("busy_but_innocent_agent", legitimate_task_history)
+    assert flag is not None  # confirmed: this really does fire on ordinary diverse usage
