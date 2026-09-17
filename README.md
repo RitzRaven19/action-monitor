@@ -82,6 +82,27 @@ Tests (no API key required, mock everything below the LLM):
 pytest tests/ -v
 ```
 
+## Deploying (Render, free tier)
+
+`render.yaml` is a Render Blueprint, so this is close to one-click:
+
+1. Push this repo to your own GitHub account (already done if you're reading this from there).
+2. On [render.com](https://render.com), sign up (no card needed for the free tier) and choose
+   **New +** → **Blueprint**, then pick this repo. Render reads `render.yaml` automatically.
+3. When prompted for the `GROQ_API_KEY` environment variable, paste your own key
+   (console.groq.com/keys) — it's entered directly in Render's dashboard, never committed to git.
+4. Deploy. Render gives you a public `https://<name>.onrender.com` URL.
+
+**Know before you share the link:**
+- The free tier's disk is **ephemeral** — the SQLite database and action logs reset whenever the
+  service redeploys or spins down from inactivity. History and persistent-identity tracking work
+  correctly *within* a session, but don't survive a cold start. Fine for a demo link; not a place
+  to rely on long-term history.
+- The free tier **sleeps after inactivity** — the first request after a while takes ~30-60s to
+  wake up.
+- **No access control** — anyone with the link can use it, which spends your Groq free-tier quota
+  (no cost risk on Groq's free tier, but worth knowing).
+
 ## What this does and does not solve
 
 See `docs/WRITEUP.md` (generated after the first demo run) for the explicit non-goals: this
