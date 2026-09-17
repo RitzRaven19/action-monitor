@@ -63,6 +63,15 @@ def test_entity_resources_accumulate_and_deduplicate(tmp_path: Path):
     assert set(store.entity_distinct_resources("agent_1")) == {"a.txt", "b.txt", "c.txt"}
 
 
+def test_reset_entity_clears_only_that_entity(tmp_path: Path):
+    store = Store(tmp_path / "store.db")
+    store.record_entity_resources("agent_1", ["a.txt", "b.txt"])
+    store.record_entity_resources("agent_2", ["z.txt"])
+    store.reset_entity("agent_1")
+    assert store.entity_distinct_resources("agent_1") == []
+    assert set(store.entity_distinct_resources("agent_2")) == {"z.txt"}
+
+
 def test_entity_resources_isolated_by_entity(tmp_path: Path):
     store = Store(tmp_path / "store.db")
     store.record_entity_resources("agent_1", ["a.txt"])

@@ -163,6 +163,13 @@ class Store:
             ).fetchall()
         return [r["resource"] for r in rows]
 
+    def reset_entity(self, entity_id: str) -> None:
+        """Clear one entity's persistent-tracking history. Sessions/runs/actions/
+        flags already recorded are untouched -- this only resets the cumulative
+        distinct-resource count detect_persistent_scope_creep reads from."""
+        with self._connect() as conn:
+            conn.execute("DELETE FROM entity_resources WHERE entity_id = ?", (entity_id,))
+
     # --- browsing / history ---
 
     def list_sessions(self, limit: int = 50) -> list[dict]:

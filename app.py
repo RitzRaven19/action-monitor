@@ -61,7 +61,15 @@ def _new_conversation() -> None:
     st.session_state.turn_index = 0
 
 
-store = Store(DB_PATH)
+@st.cache_resource
+def get_store() -> Store:
+    """One Store per server process, shared across every session and rerun --
+    without this, Streamlit reruns the whole script (and reopens the SQLite
+    file) on every single widget interaction, not just on sending a message."""
+    return Store(DB_PATH)
+
+
+store = get_store()
 _init_session()
 
 st.title("🛰️ Action Monitor Console")
@@ -80,8 +88,12 @@ with tab_live:
         )
         st.session_state.entity_id = entity_id
 
-        if st.button("🆕 New conversation", use_container_width=True):
+        id_col1, id_col2 = st.columns(2)
+        if id_col1.button("🆕 New conversation", use_container_width=True):
             _new_conversation()
+            st.rerun()
+        if id_col2.button("🧹 Clear identity", use_container_width=True, help="Resets this identity's persistent-tracking history (does not touch past sessions in History)."):
+            store.reset_entity(entity_id)
             st.rerun()
 
         st.caption(f"Conversation: `{st.session_state.thread_id[:8]}`  ·  turn {st.session_state.turn_index}")
@@ -127,7 +139,10 @@ with tab_live:
     if incoming is not None:
         _, declared_prompt, full_prompt, include_network_post = incoming
         turn_index = st.session_state.turn_index
-        run_id = f"{st.session_state.thread_id}_{turn_index}"
+        # A uuid suffix (not just turn_index) means a retry after a failed turn
+        # always gets a fresh run_id -- otherwise a second attempt at the same
+        # turn_index would collide with the failed run's already-inserted row.
+        run_id = f"{st.session_state.thread_id}_{turn_index}_{uuid.uuid4().hex[:8]}"
 
         if turn_index == 0:
             store.create_session(st.session_state.thread_id, entity_id)
@@ -141,74 +156,87 @@ with tab_live:
             actions_this_turn: list = []
             final_text = ""
             flags_this_turn = []
+            error_text = None
 
-            with st.spinner("Agent is working..."):
-                logger = ActionLogger(LOGS_DIR / f"console_{run_id}.jsonl")
-                for event in run_live(
-                    declared_prompt,
-                    full_prompt,
-                    include_network_post,
-                    logger,
-                    checkpointer=st.session_state.checkpointer,
-                    thread_id=st.session_state.thread_id,
-                    include_system_prompt=(turn_index == 0),
-                ):
-                    if isinstance(event, ActionEvent):
-                        actions_this_turn.append((event.action, event.flag))
-                        store.record_action(run_id, event.action)
-                        store.record_flag(run_id, "action", event.flag)
-                        icon, desc = SEVERITY_STYLE[event.flag.severity]
-                        with feed_box:
-                            st.markdown(f"{icon} `{event.action['tool_name']}` &rarr; `{event.action['resource']}` &mdash; *{desc}*", unsafe_allow_html=True)
-                    elif isinstance(event, CreepEvent):
-                        store.record_flag(run_id, "run_creep", event.flag)
-                    elif isinstance(event, DoneEvent):
-                        final_text = event.final_text
-                        flags_this_turn = event.flags
+            try:
+                with st.spinner("Agent is working..."):
+                    logger = ActionLogger(LOGS_DIR / f"console_{run_id}.jsonl")
+                    for event in run_live(
+                        declared_prompt,
+                        full_prompt,
+                        include_network_post,
+                        logger,
+                        checkpointer=st.session_state.checkpointer,
+                        thread_id=st.session_state.thread_id,
+                        include_system_prompt=(turn_index == 0),
+                    ):
+                        if isinstance(event, ActionEvent):
+                            actions_this_turn.append((event.action, event.flag))
+                            store.record_action(run_id, event.action)
+                            store.record_flag(run_id, "action", event.flag)
+                            icon, desc = SEVERITY_STYLE[event.flag.severity]
+                            with feed_box:
+                                st.markdown(f"{icon} `{event.action['tool_name']}` &rarr; `{event.action['resource']}` &mdash; *{desc}*", unsafe_allow_html=True)
+                        elif isinstance(event, CreepEvent):
+                            store.record_flag(run_id, "run_creep", event.flag)
+                        elif isinstance(event, DoneEvent):
+                            final_text = event.final_text
+                            flags_this_turn = event.flags
+            except Exception as e:  # noqa: BLE001 - shown to the user, not swallowed
+                error_text = f"{type(e).__name__}: {e}"
+                st.error(f"This turn failed: {error_text}")
 
-            st.write(final_text or "(no visible text response)")
-            store.finish_run(run_id, final_text)
+            store.finish_run(run_id, final_text or (f"[ERROR] {error_text}" if error_text else ""))
 
-            # --- three-scope verdict ---
-            turn_actionable = actionable_flags(flags_this_turn)
-            turn_sev = "high" if any(f.severity == "high" for f in turn_actionable) else ("medium" if turn_actionable else "none")
+            if error_text is None:
+                st.write(final_text or "(no visible text response)")
 
-            st.session_state.turn_flags.append(flags_this_turn)
-            session_flag = detect_session_scope_creep(st.session_state.turn_flags, session_id=st.session_state.thread_id)
-            if session_flag:
-                store.record_flag(run_id, "session_creep", session_flag)
-            session_sev = session_flag.severity if session_flag else "none"
+                # --- three-scope verdict ---
+                turn_actionable = actionable_flags(flags_this_turn)
+                turn_sev = "high" if any(f.severity == "high" for f in turn_actionable) else ("medium" if turn_actionable else "none")
 
-            benign_resources = [f.resource for f in flags_this_turn if f.classification == "out_of_scope_benign"]
-            store.record_entity_resources(entity_id, benign_resources, run_id=run_id)
-            cumulative = store.entity_distinct_resources(entity_id)
-            persistent_flag = detect_persistent_scope_creep(entity_id, cumulative)
-            if persistent_flag:
-                store.record_flag(run_id, "persistent_creep", persistent_flag)
-            persistent_sev = persistent_flag.severity if persistent_flag else "none"
+                st.session_state.turn_flags.append(flags_this_turn)
+                session_flag = detect_session_scope_creep(st.session_state.turn_flags, session_id=st.session_state.thread_id)
+                if session_flag:
+                    store.record_flag(run_id, "session_creep", session_flag)
+                session_sev = session_flag.severity if session_flag else "none"
 
-            verdicts = {"turn": turn_sev, "session": session_sev, "persistent": persistent_sev}
-            cols = st.columns(3)
-            for col, (label, sev) in zip(cols, [("This turn", turn_sev), ("This conversation", session_sev), ("This identity", persistent_sev)]):
-                icon, desc = SEVERITY_STYLE[sev]
-                col.markdown(f"{icon} **{label}**  \n{desc}")
+                benign_resources = [f.resource for f in flags_this_turn if f.classification == "out_of_scope_benign"]
+                store.record_entity_resources(entity_id, benign_resources, run_id=run_id)
+                cumulative = store.entity_distinct_resources(entity_id)
+                persistent_flag = detect_persistent_scope_creep(entity_id, cumulative)
+                if persistent_flag:
+                    store.record_flag(run_id, "persistent_creep", persistent_flag)
+                persistent_sev = persistent_flag.severity if persistent_flag else "none"
 
-            baseline_hits = scan_text(final_text)
-            if baseline_hits:
-                st.caption(f"🔍 Baseline would have caught: `{', '.join(baseline_hits)}`")
-            elif turn_sev != "none":
-                st.caption("🔍 Baseline would have seen **nothing** -- the visible text never mentioned it.")
+                verdicts = {"turn": turn_sev, "session": session_sev, "persistent": persistent_sev}
+                cols = st.columns(3)
+                for col, (label, sev) in zip(cols, [("This turn", turn_sev), ("This conversation", session_sev), ("This identity", persistent_sev)]):
+                    icon, desc = SEVERITY_STYLE[sev]
+                    col.markdown(f"{icon} **{label}**  \n{desc}")
+
+                baseline_hits = scan_text(final_text)
+                if baseline_hits:
+                    st.caption(f"🔍 Baseline would have caught: `{', '.join(baseline_hits)}`")
+                elif turn_sev != "none":
+                    st.caption("🔍 Baseline would have seen **nothing** -- the visible text never mentioned it.")
+            else:
+                verdicts = None
+                baseline_hits = None
 
         st.session_state.transcript.append({"role": "user", "text": full_prompt})
         st.session_state.transcript.append(
             {
                 "role": "assistant",
-                "text": final_text,
+                "text": final_text if error_text is None else f"⚠️ Turn failed: {error_text}",
                 "verdicts": verdicts,
                 "actions": actions_this_turn,
                 "baseline_hits": baseline_hits,
             }
         )
+        # Always advance -- a failed turn still occupied a slot, and retrying
+        # the same message sends it as a fresh turn (fresh run_id) rather than
+        # colliding with the failed attempt's already-inserted DB row.
         st.session_state.turn_index += 1
 
 # ---------------------------------------------------------------- History tab
