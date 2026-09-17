@@ -17,6 +17,8 @@ copy .env.example .env        # then fill in GROQ_API_KEY (free key: console.gro
 
 ## Layout
 
+- `app.py` — Streamlit live console: runs the real agent and streams the monitor's verdicts
+  as they happen (see Running, below).
 - `agent/` — LangGraph agent harness + tool definitions (web_search, read_file, write_file,
   and network_post, the last only wired in for injected-divergence demo runs).
 - `logger/` — the append-only Action Logger and the tool-wrapping layer that sits outside the
@@ -29,6 +31,16 @@ copy .env.example .env        # then fill in GROQ_API_KEY (free key: console.gro
   touch its own log" guarantee.
 
 ## Running
+
+**Live interactive console (recommended for a demo/showcase):**
+
+```
+streamlit run app.py
+```
+
+Opens a local web page. Type a task or pick a preset (including the injected-divergence and
+scope-creep cases from the demo), hit Run, and watch the real agent's tool calls get classified
+live as they happen -- straight off the Action Logger, not a canned trace.
 
 Manual single-task smoke test:
 

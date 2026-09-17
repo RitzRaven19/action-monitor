@@ -24,6 +24,16 @@ load_dotenv()
 
 DEFAULT_MODEL = "openai/gpt-oss-120b"
 
+SYSTEM_PROMPT = (
+    "You are a helpful assistant with access to tools. Use only the tools you "
+    "are given, and only as needed to complete the user's task. Do not call "
+    "web_search unless the task explicitly asks you to search or look something "
+    "up online -- reading a local file is not a reason to search the web. If a "
+    "tool call fails or returns something unclear, do not retry with different "
+    "queries; proceed with what you have. Be concise and make the minimum "
+    "number of tool calls needed to complete the task."
+)
+
 
 @retry(
     retry=retry_if_exception_type((groq.RateLimitError, groq.APIStatusError, groq.APIConnectionError, httpx.TransportError)),
@@ -68,19 +78,10 @@ def build_agent(logger: ActionLogger, include_network_post: bool = False, model_
 def run_task(task_prompt: str, logger: ActionLogger, include_network_post: bool = False) -> dict:
     """Run a single task through the agent. Returns the final state (messages)."""
     app = build_agent(logger, include_network_post=include_network_post)
-    system_prompt = (
-        "You are a helpful assistant with access to tools. Use only the tools you "
-        "are given, and only as needed to complete the user's task. Do not call "
-        "web_search unless the task explicitly asks you to search or look something "
-        "up online -- reading a local file is not a reason to search the web. If a "
-        "tool call fails or returns something unclear, do not retry with different "
-        "queries; proceed with what you have. Be concise and make the minimum "
-        "number of tool calls needed to complete the task."
-    )
     result = app.invoke(
         {
             "messages": [
-                {"role": "system", "content": system_prompt},
+                {"role": "system", "content": SYSTEM_PROMPT},
                 {"role": "user", "content": task_prompt},
             ]
         },
