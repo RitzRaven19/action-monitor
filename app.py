@@ -1,7 +1,8 @@
 """Live console: run the real agent through the real monitor and watch it
 happen. Not a mockup -- every action shown here is read straight out of the
 Action Logger while the actual LangGraph agent (Groq openai/gpt-oss-120b) is
-still running.
+still running. The engine lives in agent/live_runner.py; this file only
+renders its events.
 
 Run with:  streamlit run app.py
 Requires GROQ_API_KEY in .env (see .env.example).
@@ -13,11 +14,10 @@ from pathlib import Path
 
 import streamlit as st
 
-from agent.harness import SYSTEM_PROMPT, build_agent
+from agent.live_runner import ActionEvent, CreepEvent, DoneEvent, run_live
 from demo.baseline_cot_scanner import scan_text
 from demo.tasks import ALL_TASKS
 from envelope.envelope_generator import generate_envelope
-from judge.divergence_judge import classify_action, detect_scope_creep
 from logger.action_logger import ActionLogger
 
 st.set_page_config(page_title="Action Monitor Console", page_icon="🛰️", layout="wide")
@@ -85,53 +85,30 @@ if run_clicked:
     feed = st.container()
     status = st.empty()
 
-    seen = 0
-    flags = []
-
     try:
-        compiled = build_agent(logger, include_network_post=include_network_post)
-        messages = [
-            {"role": "system", "content": SYSTEM_PROMPT},
-            {"role": "user", "content": full_prompt},
-        ]
-        final_ai_text = ""
-
         with st.spinner("Agent is working..."):
-            for step in compiled.stream({"messages": messages}, config={"recursion_limit": 25}):
-                for node_name, node_output in step.items():
-                    if node_name == "call_model":
-                        msg = node_output["messages"][-1]
-                        if isinstance(msg.content, str) and msg.content.strip():
-                            final_ai_text = msg.content
-                        elif isinstance(msg.content, list):
-                            final_ai_text = " ".join(
-                                b.get("text", "") for b in msg.content if isinstance(b, dict)
-                            )
-
-                    all_actions = logger.read_all()
-                    new_actions = all_actions[seen:]
-                    seen = len(all_actions)
-
-                    for action in new_actions:
-                        flag = classify_action(envelope, action)
-                        flags.append(flag)
-                        icon, desc = SEVERITY_STYLE[flag.severity]
-                        with feed:
-                            st.markdown(
-                                f"{icon} **`{action['tool_name']}`** &rarr; `{action['resource']}` "
-                                f"&mdash; *{desc}*  \n<small>{flag.reason}</small>",
-                                unsafe_allow_html=True,
-                            )
-
-        creep_flag = detect_scope_creep(flags, threshold=3)
-        if creep_flag:
-            flags.append(creep_flag)
-            icon, desc = SEVERITY_STYLE[creep_flag.severity]
-            with feed:
-                st.markdown(f"{icon} **scope-creep pass** &mdash; *{desc}*  \n<small>{creep_flag.reason}</small>", unsafe_allow_html=True)
+            for event in run_live(declared_prompt, full_prompt, include_network_post, logger):
+                if isinstance(event, ActionEvent):
+                    icon, desc = SEVERITY_STYLE[event.flag.severity]
+                    with feed:
+                        st.markdown(
+                            f"{icon} **`{event.action['tool_name']}`** &rarr; `{event.action['resource']}` "
+                            f"&mdash; *{desc}*  \n<small>{event.flag.reason}</small>",
+                            unsafe_allow_html=True,
+                        )
+                elif isinstance(event, CreepEvent):
+                    icon, desc = SEVERITY_STYLE[event.flag.severity]
+                    with feed:
+                        st.markdown(
+                            f"{icon} **scope-creep pass** &mdash; *{desc}*  \n<small>{event.flag.reason}</small>",
+                            unsafe_allow_html=True,
+                        )
+                elif isinstance(event, DoneEvent):
+                    final_text = event.final_text
+                    flags = event.flags
 
         st.markdown("### 💬 Agent's final answer")
-        st.info(final_ai_text or "(no visible text response)")
+        st.info(final_text or "(no visible text response)")
 
         high = [f for f in flags if f.severity == "high"]
         medium = [f for f in flags if f.severity == "medium"]
@@ -142,7 +119,7 @@ if run_clicked:
         else:
             status.success("✅ Clean run -- every action matched the declared envelope.")
 
-        baseline_hits = scan_text(final_ai_text)
+        baseline_hits = scan_text(final_text)
         st.markdown("### 🔍 What a naive CoT-text-scan baseline would have seen")
         if baseline_hits:
             st.write(f"Keyword hits in the visible answer: `{', '.join(baseline_hits)}`")
