@@ -17,10 +17,14 @@ copy .env.example .env        # then fill in GROQ_API_KEY (free key: console.gro
 
 ## Layout
 
-- `app.py` — Streamlit live console: a real multi-turn conversation with the real agent, judged
-  live at three scopes at once (this turn / this conversation / this identity's whole history),
-  backed by a real SQLite database with a browsable History tab (see Running, below).
-- `agent/` — LangGraph agent harness (`harness.py`), the streaming engine behind the console
+- `server.py` + `static/` — the custom HUD console (FastAPI backend + vanilla HTML/CSS/JS
+  frontend): a real multi-turn conversation with the real agent, judged live at three scopes at
+  once (this turn / this conversation / this identity's whole history), backed by SQLite with a
+  browsable History tab. This is a thin HTTP wrapper around exactly the same logic `app.py` uses —
+  no monitoring logic lives here (see Running, below).
+- `app.py` — the original Streamlit live console. Kept as a lightweight fallback; functionally
+  equivalent to `server.py`/`static/`, just without the custom visual design.
+- `agent/` — LangGraph agent harness (`harness.py`), the streaming engine behind both consoles
   (`live_runner.py`), and tool definitions (web_search, read_file, write_file, and network_post,
   the last only wired in for injected-divergence demo runs).
 - `storage/` — the app's own SQLite store (sessions/turns/actions/flags/entity history) — separate
@@ -41,17 +45,24 @@ copy .env.example .env        # then fill in GROQ_API_KEY (free key: console.gro
 **Live interactive console (recommended for a demo/showcase):**
 
 ```
-streamlit run app.py
+uvicorn server:app --reload
 ```
 
-Opens a local web page: a real multi-turn conversation with the real agent (LangGraph's own
-checkpointer gives it genuine memory across turns). Type a message or send a preset (including the
-injected-divergence and scope-creep cases from the demo), and watch each turn's tool calls get
-classified live, plus three running verdicts after every turn -- **this turn**, **this
-conversation** (session-level scope-creep, v3), and **this identity's entire history** (persistent
-tracking, v4). Set the "Agent identity" field in the sidebar and reuse it across conversations to
-see the persistent check accumulate for real. The History tab lists every session ever recorded,
-read straight back from the SQLite database.
+Opens at `http://127.0.0.1:8000`: a real multi-turn conversation with the real agent (LangGraph's
+own checkpointer gives it genuine memory across turns). Type a message or send a preset (including
+the injected-divergence and scope-creep cases from the demo), and watch each turn's tool calls get
+classified live -- streamed straight off the server, not a Streamlit rerun -- plus three running
+verdicts after every turn -- **this turn**, **this conversation** (session-level scope-creep, v3),
+and **this identity's entire history** (persistent tracking, v4). Set the "Agent identity" field
+in the sidebar and reuse it across conversations to see the persistent check accumulate for real.
+The History tab lists every session ever recorded, read straight back from the SQLite database.
+
+Lightweight fallback (same underlying logic, Streamlit's own look instead of the custom HUD
+design):
+
+```
+streamlit run app.py
+```
 
 Manual single-task smoke test:
 

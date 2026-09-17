@@ -1,0 +1,111 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Action Monitor Console</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@600;700;800;900&family=Chakra+Petch:wght@400;500;600;700&family=Share+Tech+Mono&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+
+<header class="topbar">
+  <div class="brand">
+    <span class="brand-mark">&#9679;</span>
+    <span class="brand-name">ACTION MONITOR CONSOLE</span>
+    <span class="brand-tag">// BEHAVIOR-BASED AGENT MONITORING</span>
+  </div>
+  <nav class="tabs">
+    <button class="tab-btn active" data-view="live">LIVE CONSOLE</button>
+    <button class="tab-btn" data-view="history">HISTORY / AUDIT LOG</button>
+  </nav>
+</header>
+
+<main class="viewport">
+
+  <!-- ============================== LIVE CONSOLE ============================== -->
+  <section id="view-live" class="view active">
+    <div class="layout">
+
+      <aside class="panel sidebar-panel">
+        <div class="panel-inner">
+          <div class="corner-bracket tl"></div><div class="corner-bracket tr"></div>
+          <div class="corner-bracket bl"></div><div class="corner-bracket br"></div>
+
+          <h2 class="section-label">// IDENTITY</h2>
+          <label class="field-label" for="entity-id">Agent identity</label>
+          <input id="entity-id" class="text-input" type="text" value="console_agent">
+          <p class="hint">Persistent tracking accumulates per identity, across every conversation
+            that reuses this name &mdash; not reset by New Conversation.</p>
+
+          <div class="btn-row">
+            <button id="btn-new-conversation" class="hud-btn">+ NEW CONV</button>
+            <button id="btn-clear-identity" class="hud-btn hud-btn-danger">CLEAR ID</button>
+          </div>
+
+          <div class="meta-strip">
+            <span>CONV: <span id="conv-id" class="mono">&mdash;</span></span>
+            <span>TURN: <span id="turn-count" class="mono">0</span></span>
+          </div>
+
+          <h2 class="section-label section-label-spaced">// SEND A PRESET</h2>
+          <select id="preset-select" class="text-input"></select>
+          <button id="btn-send-preset" class="hud-btn hud-btn-block">SEND PRESET</button>
+        </div>
+      </aside>
+
+      <section class="panel chat-panel">
+        <div class="panel-inner chat-panel-inner">
+          <div class="corner-bracket tl"></div><div class="corner-bracket tr"></div>
+          <div class="corner-bracket bl"></div><div class="corner-bracket br"></div>
+
+          <p class="hint intro-hint">A real multi-turn conversation with the real agent. Every
+            turn is judged at three scopes: this turn alone, this whole conversation, and this
+            identity's entire recorded history.</p>
+
+          <div id="transcript" class="transcript"></div>
+
+          <form id="message-form" class="message-form">
+            <input id="message-input" class="text-input" type="text" placeholder="Message the agent..." autocomplete="off">
+            <button type="submit" class="hud-btn hud-btn-accent">SEND</button>
+          </form>
+        </div>
+      </section>
+
+    </div>
+  </section>
+
+  <!-- ============================== HISTORY ============================== -->
+  <section id="view-history" class="view">
+    <div class="layout layout-history">
+
+      <aside class="panel sidebar-panel">
+        <div class="panel-inner">
+          <div class="corner-bracket tl"></div><div class="corner-bracket tr"></div>
+          <div class="corner-bracket bl"></div><div class="corner-bracket br"></div>
+          <h2 class="section-label">// SESSIONS</h2>
+          <p class="hint">Every session recorded in the SQLite store, newest first.</p>
+          <div id="session-list" class="session-list"></div>
+        </div>
+      </aside>
+
+      <section class="panel chat-panel">
+        <div class="panel-inner">
+          <div class="corner-bracket tl"></div><div class="corner-bracket tr"></div>
+          <div class="corner-bracket bl"></div><div class="corner-bracket br"></div>
+          <div id="session-detail" class="session-detail">
+            <p class="hint">Select a session to inspect its turns, actions, and flags.</p>
+          </div>
+        </div>
+      </section>
+
+    </div>
+  </section>
+
+</main>
+
+<script src="app.js"></script>
+</body>
+</html>
