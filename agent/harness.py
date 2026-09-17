@@ -49,8 +49,22 @@ def _invoke_with_retry(llm_with_tools, messages):
     return llm_with_tools.invoke(messages)
 
 
-def build_agent(logger: ActionLogger, include_network_post: bool = False, model_name: str = DEFAULT_MODEL):
-    """Construct and compile the LangGraph agent, wired to `logger` via wrapped tools."""
+def build_agent(
+    logger: ActionLogger,
+    include_network_post: bool = False,
+    model_name: str = DEFAULT_MODEL,
+    checkpointer=None,
+):
+    """Construct and compile the LangGraph agent, wired to `logger` via wrapped tools.
+
+    `checkpointer` (e.g. langgraph.checkpoint.memory.MemorySaver) is optional and
+    defaults to None, which is the current behavior everywhere: no persistence,
+    every call independent. Passing a checkpointer plus a `thread_id` in the
+    invoke/stream config gives the agent real multi-turn memory -- LangGraph
+    merges each turn's new messages onto that thread's persisted state via
+    MessagesState's own reducer, so callers only ever need to send the new
+    turn's message, not the whole history.
+    """
     if not os.environ.get("GROQ_API_KEY"):
         raise RuntimeError(
             "GROQ_API_KEY is not set. Copy .env.example to .env and fill in your free "
@@ -72,7 +86,7 @@ def build_agent(logger: ActionLogger, include_network_post: bool = False, model_
     graph.add_conditional_edges("call_model", tools_condition, {"tools": "tools", END: END})
     graph.add_edge("tools", "call_model")
 
-    return graph.compile()
+    return graph.compile(checkpointer=checkpointer)
 
 
 def run_task(task_prompt: str, logger: ActionLogger, include_network_post: bool = False) -> dict:

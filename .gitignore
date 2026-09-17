@@ -4,4 +4,5 @@ __pycache__/
 *.pyc
 logs/*.jsonl
 state/*.json
+state/*.db
 .pytest_cache/

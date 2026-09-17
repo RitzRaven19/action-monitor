@@ -17,18 +17,24 @@ copy .env.example .env        # then fill in GROQ_API_KEY (free key: console.gro
 
 ## Layout
 
-- `app.py` — Streamlit live console: runs the real agent and streams the monitor's verdicts
-  as they happen (see Running, below).
-- `agent/` — LangGraph agent harness + tool definitions (web_search, read_file, write_file,
-  and network_post, the last only wired in for injected-divergence demo runs).
+- `app.py` — Streamlit live console: a real multi-turn conversation with the real agent, judged
+  live at three scopes at once (this turn / this conversation / this identity's whole history),
+  backed by a real SQLite database with a browsable History tab (see Running, below).
+- `agent/` — LangGraph agent harness (`harness.py`), the streaming engine behind the console
+  (`live_runner.py`), and tool definitions (web_search, read_file, write_file, and network_post,
+  the last only wired in for injected-divergence demo runs).
+- `storage/` — the app's own SQLite store (sessions/turns/actions/flags/entity history) — separate
+  from the Action Logger below, which is a security control, not a browsable history store.
 - `logger/` — the append-only Action Logger and the tool-wrapping layer that sits outside the
   agent's control.
 - `envelope/` — the rule-based Envelope Generator (declares expected scope per task).
-- `judge/` — the rule-based Divergence Judge (classifies observed actions against the envelope).
+- `judge/` — the rule-based Divergence Judge: per-action classification, plus the run-level,
+  session-level, and persistent (cross-process, no session boundary) scope-creep passes.
 - `demo/` — the authored task set, the naive CoT-text-scan baseline, and the full demo runner.
 - `reporting/` — builds the side-by-side comparison report.
-- `tests/` — pytest suite covering the logger, envelope generator, judge, and the "agent cannot
-  touch its own log" guarantee.
+- `scripts/` — live (non-pytest) end-to-end smoke tests that exercise the real agent/API.
+- `tests/` — pytest suite (no API key needed) covering the logger, envelope generator, judge,
+  the SQLite store, and the "agent cannot touch its own log" guarantee.
 
 ## Running
 
@@ -38,9 +44,14 @@ copy .env.example .env        # then fill in GROQ_API_KEY (free key: console.gro
 streamlit run app.py
 ```
 
-Opens a local web page. Type a task or pick a preset (including the injected-divergence and
-scope-creep cases from the demo), hit Run, and watch the real agent's tool calls get classified
-live as they happen -- straight off the Action Logger, not a canned trace.
+Opens a local web page: a real multi-turn conversation with the real agent (LangGraph's own
+checkpointer gives it genuine memory across turns). Type a message or send a preset (including the
+injected-divergence and scope-creep cases from the demo), and watch each turn's tool calls get
+classified live, plus three running verdicts after every turn -- **this turn**, **this
+conversation** (session-level scope-creep, v3), and **this identity's entire history** (persistent
+tracking, v4). Set the "Agent identity" field in the sidebar and reuse it across conversations to
+see the persistent check accumulate for real. The History tab lists every session ever recorded,
+read straight back from the SQLite database.
 
 Manual single-task smoke test:
 
