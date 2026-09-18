@@ -27,12 +27,22 @@ entirely, tracking an entity's cumulative distinct out-of-scope resources
 across its whole recorded history via judge.entity_registry.EntityRegistry:
 
   persistent_scope_creep_suspicious -> N+ distinct resources, no session needed -> medium severity, alert
+
+A fifth pass (v5, detect_weighted_persistent_scope_creep) changes what's being
+counted rather than where: instead of a flat count of distinct resources, it
+sums each resource's judge.resource_sensitivity.sensitivity() score. This is
+additive, not a replacement -- detect_persistent_scope_creep (v4) and its own
+documented false-positive finding are untouched; this is a second, parallel
+signal over the same cumulative resource data:
+
+  weighted_persistent_scope_creep_suspicious -> weighted sensitivity sum crosses threshold -> medium severity, alert
 """
 from __future__ import annotations
 
 from dataclasses import dataclass
 
 from envelope.schema import Envelope
+from judge.resource_sensitivity import sensitivity
 
 TOOL_TO_CATEGORY = {
     "read_file": "read_file",
@@ -195,6 +205,45 @@ def detect_persistent_scope_creep(entity_id: str, cumulative_distinct_resources:
             f"resources across its entire recorded history (resources: {sorted(distinct)}), "
             f"with no session grouping required to catch it -- but this cannot distinguish "
             f"that from an equally long history of unrelated, individually legitimate tasks."
+        ),
+    )
+
+
+def detect_weighted_persistent_scope_creep(
+    entity_id: str, cumulative_distinct_resources: list[str], weight_threshold: float = 4.0
+) -> Flag | None:
+    """v5: the same cumulative resource data detect_persistent_scope_creep uses,
+    but summed by judge.resource_sensitivity.sensitivity() instead of counted.
+
+    Additive, not a replacement -- detect_persistent_scope_creep (v4) keeps
+    running unmodified, and its documented false-positive finding stands as
+    its own result. This is a second, parallel signal over the same data,
+    meant to be compared against it, not to supersede it. Its own honest
+    limit: a resource whose name doesn't match anything in
+    resource_sensitivity's keyword lists scores the same low default as
+    every other mundane resource, so this only helps when sensitive
+    resources are actually named recognizably.
+    """
+    distinct = set(cumulative_distinct_resources)
+    if not distinct:
+        return None
+
+    weighted_scores = {r: sensitivity(r) for r in distinct}
+    total_weight = sum(weighted_scores.values())
+    if total_weight < weight_threshold:
+        return None
+
+    return Flag(
+        task_id=entity_id,
+        tool_name="<multiple runs, no session boundary>",
+        resource=", ".join(sorted(distinct)),
+        classification="weighted_persistent_scope_creep_suspicious",
+        severity="medium",
+        reason=(
+            f"Entity '{entity_id}' has accumulated a sensitivity-weighted score of "
+            f"{total_weight:.1f} (threshold {weight_threshold}) across {len(distinct)} distinct "
+            f"resources (per-resource scores: {weighted_scores}) -- weighted by how sensitive "
+            f"each resource's name looks, not just how many there are."
         ),
     )
 
