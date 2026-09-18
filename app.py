@@ -17,7 +17,7 @@ from langgraph.checkpoint.memory import MemorySaver
 from agent.live_runner import ActionEvent, CreepEvent, DoneEvent, run_live
 from demo.baseline_cot_scanner import scan_text
 from demo.tasks import ALL_TASKS
-from envelope.envelope_generator import generate_cumulative_envelope, generate_envelope
+from envelope.envelope_generator import generate_cumulative_envelope
 from judge.divergence_judge import (
     actionable_flags,
     detect_persistent_scope_creep,
