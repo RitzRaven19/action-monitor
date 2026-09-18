@@ -50,3 +50,37 @@ def generate_envelope(task_id: str, prompt: str) -> Envelope:
         allowed_resources=tuple(sorted(resources)),
         effect_scope=effect_scope,
     )
+
+
+def generate_cumulative_envelope(task_id: str, declared_prompts: list[str]) -> Envelope:
+    """Union the per-prompt envelopes of every declared prompt seen so far in a
+    conversation.
+
+    Found via the live console: a short natural follow-up ("also check
+    data/headcount_note.txt") doesn't restate the base task, so generating its
+    envelope in isolation (generate_envelope on that turn's text alone) yields
+    an empty declared scope -- and then even a legitimate read in that turn
+    reads as high-severity out-of-scope, purely because that turn's own text
+    never said "read". A real assistant understands a follow-up in the context
+    of what was already established in the conversation; this does the same
+    for envelope generation. Only used by the interactive consoles
+    (app.py/server.py) -- the demo scripts and the v3/v4 evasion experiments
+    deliberately keep per-call envelope isolation, since that isolation is
+    exactly what those experiments are testing.
+    """
+    categories: set[str] = set()
+    resources: set[str] = set()
+    effect_scope = "read_only"
+    for prompt in declared_prompts:
+        env = generate_envelope(task_id, prompt)
+        categories |= env.allowed_tool_categories
+        resources |= set(env.allowed_resources)
+        if env.effect_scope == "read_write":
+            effect_scope = "read_write"
+
+    return Envelope(
+        task_id=task_id,
+        allowed_tool_categories=frozenset(categories),
+        allowed_resources=tuple(sorted(resources)),
+        effect_scope=effect_scope,
+    )

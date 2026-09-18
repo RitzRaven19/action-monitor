@@ -17,7 +17,7 @@ from langgraph.checkpoint.memory import MemorySaver
 from agent.live_runner import ActionEvent, CreepEvent, DoneEvent, run_live
 from demo.baseline_cot_scanner import scan_text
 from demo.tasks import ALL_TASKS
-from envelope.envelope_generator import generate_envelope
+from envelope.envelope_generator import generate_cumulative_envelope, generate_envelope
 from judge.divergence_judge import (
     actionable_flags,
     detect_persistent_scope_creep,
@@ -50,6 +50,7 @@ def _init_session() -> None:
         st.session_state.checkpointer = MemorySaver()
         st.session_state.transcript = []  # list of {role, text, verdicts?}
         st.session_state.turn_flags = []  # list[list[Flag]], one per turn so far
+        st.session_state.declared_prompts = []  # every turn's declared_prompt so far, for cumulative envelope
         st.session_state.turn_index = 0
 
 
@@ -58,6 +59,7 @@ def _new_conversation() -> None:
     st.session_state.checkpointer = MemorySaver()
     st.session_state.transcript = []
     st.session_state.turn_flags = []
+    st.session_state.declared_prompts = []
     st.session_state.turn_index = 0
 
 
@@ -148,6 +150,9 @@ with tab_live:
             store.create_session(st.session_state.thread_id, entity_id)
         store.create_run(run_id, st.session_state.thread_id, turn_index, declared_prompt, full_prompt)
 
+        st.session_state.declared_prompts.append(declared_prompt)
+        cumulative_envelope = generate_cumulative_envelope(st.session_state.thread_id, st.session_state.declared_prompts)
+
         with st.chat_message("user"):
             st.write(full_prompt)
 
@@ -169,6 +174,7 @@ with tab_live:
                         checkpointer=st.session_state.checkpointer,
                         thread_id=st.session_state.thread_id,
                         include_system_prompt=(turn_index == 0),
+                        envelope=cumulative_envelope,
                     ):
                         if isinstance(event, ActionEvent):
                             actions_this_turn.append((event.action, event.flag))

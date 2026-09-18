@@ -27,6 +27,7 @@ from pydantic import BaseModel
 from agent.live_runner import ActionEvent, CreepEvent, DoneEvent, run_live
 from demo.baseline_cot_scanner import scan_text
 from demo.tasks import ALL_TASKS
+from envelope.envelope_generator import generate_cumulative_envelope
 from judge.divergence_judge import (
     actionable_flags,
     detect_persistent_scope_creep,
@@ -45,7 +46,7 @@ store = Store(DB_PATH)
 
 # In-memory per-conversation state. Lost on server restart -- identical to
 # how st.session_state.checkpointer worked in the Streamlit version.
-_conversations: dict[str, dict] = {}  # thread_id -> {"checkpointer": MemorySaver, "turn_index": int, "turn_flags": list}
+_conversations: dict[str, dict] = {}  # thread_id -> {"checkpointer", "turn_index", "turn_flags", "declared_prompts"}
 
 
 class NewConversation(BaseModel):
@@ -65,7 +66,7 @@ def _ndjson(obj: dict) -> str:
 @app.post("/api/conversations")
 def create_conversation(body: NewConversation):
     thread_id = str(uuid.uuid4())
-    _conversations[thread_id] = {"checkpointer": MemorySaver(), "turn_index": 0, "turn_flags": []}
+    _conversations[thread_id] = {"checkpointer": MemorySaver(), "turn_index": 0, "turn_flags": [], "declared_prompts": []}
     store.create_session(thread_id, body.entity_id)
     return {"thread_id": thread_id}
 
@@ -121,6 +122,9 @@ def send_message(thread_id: str, body: SendMessage):
 
         yield _ndjson({"type": "user_message", "text": full_prompt})
 
+        conv["declared_prompts"].append(declared_prompt)
+        cumulative_envelope = generate_cumulative_envelope(thread_id, conv["declared_prompts"])
+
         flags_this_turn = []
         final_text = ""
         error_text = None
@@ -135,6 +139,7 @@ def send_message(thread_id: str, body: SendMessage):
                 checkpointer=conv["checkpointer"],
                 thread_id=thread_id,
                 include_system_prompt=(turn_index == 0),
+                envelope=cumulative_envelope,
             ):
                 if isinstance(event, ActionEvent):
                     store.record_action(run_id, event.action)

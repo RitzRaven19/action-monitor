@@ -55,6 +55,7 @@ def run_live(
     checkpointer=None,
     thread_id: str | None = None,
     include_system_prompt: bool = True,
+    envelope: Envelope | None = None,
 ) -> Iterator[LiveEvent]:
     """Stream a task through the real agent. Yields ActionEvent as each tool
     call lands in the log, then CreepEvent if the scope-creep pass fires, then
@@ -62,7 +63,14 @@ def run_live(
 
     `declared_prompt` drives envelope generation (Section 5.3: the envelope
     only ever sees the declared task, never anything appended at runtime);
-    `full_prompt` is what's actually sent to the agent.
+    `full_prompt` is what's actually sent to the agent. If `envelope` is not
+    given, one is generated from `declared_prompt` alone (unchanged, isolated
+    behavior -- what every demo script and the v3/v4 evasion experiments
+    still use). A caller running a multi-turn conversation should instead
+    pass envelope.envelope_generator.generate_cumulative_envelope's result,
+    built from every turn's declared_prompt so far -- otherwise a short
+    natural follow-up ("also check X") gets its own empty envelope and even a
+    legitimate action in that turn reads as high-severity out-of-scope.
 
     For a single-shot run (the default), leave `checkpointer`/`thread_id`
     unset -- behavior is unchanged from before multi-turn support existed.
@@ -71,7 +79,8 @@ def run_live(
     first turn -- LangGraph's own checkpointer merges each new turn's message
     onto that thread's persisted history, so only the new message is sent.
     """
-    envelope: Envelope = generate_envelope("live_run", declared_prompt)
+    if envelope is None:
+        envelope = generate_envelope("live_run", declared_prompt)
     compiled = build_agent(logger, include_network_post=include_network_post, checkpointer=checkpointer)
 
     messages = []
