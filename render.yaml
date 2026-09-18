@@ -8,3 +8,8 @@ services:
     envVars:
       - key: GROQ_API_KEY
         sync: false
+      # ACCESS_PASSWORD, RATE_LIMIT_MAX_MESSAGES, RATE_LIMIT_WINDOW_SECONDS are
+      # all optional and deliberately left out of this blueprint so the
+      # one-click deploy doesn't prompt for them -- add them later in
+      # Render's dashboard (Environment tab) if you want them. See the
+      # README's deploy section.

@@ -18,11 +18,14 @@ from storage.db import Store
 
 @pytest.fixture(autouse=True)
 def isolated_store(tmp_path: Path, monkeypatch):
-    """Every test gets a fresh, temp-file-backed store and a clean
-    conversations dict -- never touches the real state/console.db, and one
-    test's data can't leak into another's."""
+    """Every test gets a fresh, temp-file-backed store, a clean conversations
+    dict, and a clean rate-limit counter -- never touches the real
+    state/console.db, and one test's data/counters can't leak into another's
+    (TestClient requests all share the same "testclient" source IP)."""
     monkeypatch.setattr(server, "store", Store(tmp_path / "test_console.db"))
     server._conversations.clear()
+    server._message_timestamps.clear()
+    monkeypatch.delenv("ACCESS_PASSWORD", raising=False)
     yield
 
 
@@ -105,3 +108,71 @@ def test_static_index_is_served(client):
 
 def test_list_sessions_empty_when_nothing_recorded(client):
     assert client.get("/api/history/sessions").json() == []
+
+
+# ---------------------------------------------------------------- rate limiting
+
+def test_rate_limit_returns_429_past_the_threshold(client, monkeypatch):
+    monkeypatch.setattr(server, "RATE_LIMIT_MAX_MESSAGES", 2)
+    thread_id = client.post("/api/conversations", json={}).json()["thread_id"]
+
+    # Invalid bodies (missing text/task_id) 400 quickly, with no LLM call needed,
+    # but still count against the limit -- the limiter guards the endpoint
+    # itself, not just successful runs.
+    r1 = client.post(f"/api/conversations/{thread_id}/messages", json={})
+    r2 = client.post(f"/api/conversations/{thread_id}/messages", json={})
+    r3 = client.post(f"/api/conversations/{thread_id}/messages", json={})
+    assert r1.status_code == 400
+    assert r2.status_code == 400
+    assert r3.status_code == 429
+
+
+def test_rate_limit_keyed_by_client_host(monkeypatch):
+    """The limiter is keyed on request.client.host directly (not a spoofable
+    header like X-Forwarded-For) -- verified at the function level rather than
+    via TestClient, which doesn't give control over the simulated peer IP."""
+    monkeypatch.setattr(server, "RATE_LIMIT_MAX_MESSAGES", 1)
+    server._message_timestamps.clear()
+
+    server._check_rate_limit("10.0.0.1")  # first request from this IP: fine
+    try:
+        server._check_rate_limit("10.0.0.1")  # second from the same IP: over budget
+        assert False, "expected the second call from the same IP to raise"
+    except server.HTTPException as e:
+        assert e.status_code == 429
+
+    server._check_rate_limit("10.0.0.2")  # a different IP has its own, untouched budget
+
+
+# ---------------------------------------------------------------- access gate
+
+def test_access_gate_off_by_default(client):
+    """No ACCESS_PASSWORD set -> every existing test above already proves this,
+    but make it explicit: unauthenticated requests succeed."""
+    assert client.get("/api/presets").status_code == 200
+
+
+def test_access_gate_blocks_without_credentials_when_password_set(client, monkeypatch):
+    monkeypatch.setenv("ACCESS_PASSWORD", "sekrit")
+    res = client.get("/api/presets")
+    assert res.status_code == 401
+
+
+def test_access_gate_blocks_wrong_password(client, monkeypatch):
+    monkeypatch.setenv("ACCESS_PASSWORD", "sekrit")
+    res = client.get("/api/presets", auth=("anyuser", "wrong"))
+    assert res.status_code == 401
+
+
+def test_access_gate_allows_correct_password(client, monkeypatch):
+    monkeypatch.setenv("ACCESS_PASSWORD", "sekrit")
+    res = client.get("/api/presets", auth=("anyuser", "sekrit"))
+    assert res.status_code == 200
+
+
+def test_access_gate_ignores_username_only_checks_password(client, monkeypatch):
+    """Deliberate design: a single shared password gate, not a real user
+    system -- any username is accepted alongside the correct password."""
+    monkeypatch.setenv("ACCESS_PASSWORD", "sekrit")
+    res = client.get("/api/presets", auth=("whoever", "sekrit"))
+    assert res.status_code == 200

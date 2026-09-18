@@ -4,7 +4,13 @@ A behavior-based monitor for LLM agents: instead of reading the agent's chain-of
 it watches the agent's actual tool calls and compares them against a declared scope for the
 task ("envelope"), flagging divergence with a severity classification.
 
-See `docs/` for the full design rationale and, after running the demo, the results table.
+See `docs/` for the full design rationale and results:
+- `WRITEUP.md` — v1/v2 results (0% false positives, 100% detection vs. 60% for the baseline).
+- `EVASION_FINDINGS.md` — v3/v4/v5: adversarial testing of the scope-creep detector itself, ending
+  in an honest trade-off finding rather than a "problem solved" claim.
+- `ENVELOPE_COMPARISON.md` — rule-based vs. LLM-based envelope generation, including whether the
+  LLM version is foolable by the same injection the judge already catches.
+- `dashboard.html` — a static visual summary of the above.
 
 ## Setup
 
@@ -31,14 +37,20 @@ copy .env.example .env        # then fill in GROQ_API_KEY (free key: console.gro
   from the Action Logger below, which is a security control, not a browsable history store.
 - `logger/` — the append-only Action Logger and the tool-wrapping layer that sits outside the
   agent's control.
-- `envelope/` — the rule-based Envelope Generator (declares expected scope per task).
+- `envelope/` — the rule-based Envelope Generator (declares expected scope per task) plus
+  `envelope_generator_llm.py`, an LLM-based alternative kept as a research comparison
+  (`docs/ENVELOPE_COMPARISON.md`), not wired into the production path.
 - `judge/` — the rule-based Divergence Judge: per-action classification, plus the run-level,
-  session-level, and persistent (cross-process, no session boundary) scope-creep passes.
+  session-level, persistent (cross-process, no session boundary), and sensitivity-weighted
+  (`resource_sensitivity.py`) scope-creep passes.
 - `demo/` — the authored task set, the naive CoT-text-scan baseline, and the full demo runner.
 - `reporting/` — builds the side-by-side comparison report.
-- `scripts/` — live (non-pytest) end-to-end smoke tests that exercise the real agent/API.
+- `scripts/` — live (non-pytest) end-to-end smoke tests and research comparisons that exercise the
+  real agent/API (evasion/persistent-tracking demos, the weighted-scoring check, the envelope
+  generator comparison).
 - `tests/` — pytest suite (no API key needed) covering the logger, envelope generator, judge,
-  the SQLite store, and the "agent cannot touch its own log" guarantee.
+  resource sensitivity, the SQLite store, the HTTP layer (routing, auth gate, rate limiting), and
+  the "agent cannot touch its own log" guarantee.
 
 ## Running
 
@@ -100,8 +112,16 @@ pytest tests/ -v
   to rely on long-term history.
 - The free tier **sleeps after inactivity** — the first request after a while takes ~30-60s to
   wake up.
-- **No access control** — anyone with the link can use it, which spends your Groq free-tier quota
-  (no cost risk on Groq's free tier, but worth knowing).
+
+**Optional protection, if you're sharing the link somewhere strangers might click it** (add these
+in Render's dashboard → your service → Environment, at any time — no redeploy needed, and leaving
+them unset deploys exactly as if they didn't exist):
+- `ACCESS_PASSWORD` — requires an HTTP Basic password on every API call (not the page itself, so
+  visitors can see the UI but can't run anything without it). Any username works; only the
+  password is checked.
+- `RATE_LIMIT_MAX_MESSAGES` / `RATE_LIMIT_WINDOW_SECONDS` — caps how many messages one IP can send
+  in a rolling window (default: 10 per 600 seconds) before getting a 429, so one visitor can't burn
+  through your whole Groq free-tier quota alone.
 
 ## What this does and does not solve
 

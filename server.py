@@ -13,13 +13,18 @@ Requires GROQ_API_KEY in .env (see .env.example).
 from __future__ import annotations
 
 import json
+import os
+import secrets
+import time
 import uuid
+from collections import defaultdict
 from pathlib import Path
 from typing import Optional
 
-from fastapi import FastAPI, HTTPException
+from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
+from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from fastapi.staticfiles import StaticFiles
 from langgraph.checkpoint.memory import MemorySaver
 from pydantic import BaseModel
@@ -48,6 +53,44 @@ store = Store(DB_PATH)
 # how st.session_state.checkpointer worked in the Streamlit version.
 _conversations: dict[str, dict] = {}  # thread_id -> {"checkpointer", "turn_index", "turn_flags", "declared_prompts"}
 
+# ---------------------------------------------------------------- access gate
+# Off by default (local dev, and any deployment that doesn't set the env var
+# behaves exactly as before). Set ACCESS_PASSWORD to require it -- protects
+# the API routes only, not the static frontend shell, so a visitor without
+# the password can see the UI but can't spend Groq quota through it.
+_basic_auth = HTTPBasic(auto_error=False)
+
+
+def require_auth(credentials: Optional[HTTPBasicCredentials] = Depends(_basic_auth)) -> None:
+    expected_password = os.environ.get("ACCESS_PASSWORD")
+    if not expected_password:
+        return
+    if credentials is None or not secrets.compare_digest(credentials.password, expected_password):
+        raise HTTPException(status_code=401, detail="Unauthorized", headers={"WWW-Authenticate": "Basic"})
+
+
+# ---------------------------------------------------------------- rate limiting
+# A minimal in-memory per-IP token bucket -- no new dependency for something
+# this small. Applied only to the one endpoint that actually spends Groq
+# quota (sending a message), not the whole API.
+RATE_LIMIT_MAX_MESSAGES = int(os.environ.get("RATE_LIMIT_MAX_MESSAGES", "10"))
+RATE_LIMIT_WINDOW_SECONDS = int(os.environ.get("RATE_LIMIT_WINDOW_SECONDS", "600"))
+_message_timestamps: dict[str, list[float]] = defaultdict(list)
+
+
+def _check_rate_limit(client_ip: str) -> None:
+    now = time.time()
+    window_start = now - RATE_LIMIT_WINDOW_SECONDS
+    timestamps = _message_timestamps[client_ip]
+    while timestamps and timestamps[0] < window_start:
+        timestamps.pop(0)
+    if len(timestamps) >= RATE_LIMIT_MAX_MESSAGES:
+        raise HTTPException(
+            status_code=429,
+            detail=f"Rate limit exceeded: max {RATE_LIMIT_MAX_MESSAGES} messages per {RATE_LIMIT_WINDOW_SECONDS}s. Try again later.",
+        )
+    timestamps.append(now)
+
 
 class NewConversation(BaseModel):
     entity_id: str = "console_agent"
@@ -63,7 +106,7 @@ def _ndjson(obj: dict) -> str:
     return json.dumps(obj) + "\n"
 
 
-@app.post("/api/conversations")
+@app.post("/api/conversations", dependencies=[Depends(require_auth)])
 def create_conversation(body: NewConversation):
     thread_id = str(uuid.uuid4())
     _conversations[thread_id] = {"checkpointer": MemorySaver(), "turn_index": 0, "turn_flags": [], "declared_prompts": []}
@@ -71,7 +114,7 @@ def create_conversation(body: NewConversation):
     return {"thread_id": thread_id}
 
 
-@app.get("/api/presets")
+@app.get("/api/presets", dependencies=[Depends(require_auth)])
 def list_presets():
     return [
         {"task_id": t.task_id, "label": t.task_id, "injected": t.injected, "prompt": t.prompt}
@@ -79,18 +122,18 @@ def list_presets():
     ]
 
 
-@app.post("/api/entities/{entity_id}/reset")
+@app.post("/api/entities/{entity_id}/reset", dependencies=[Depends(require_auth)])
 def reset_entity(entity_id: str):
     store.reset_entity(entity_id)
     return {"ok": True}
 
 
-@app.get("/api/history/sessions")
+@app.get("/api/history/sessions", dependencies=[Depends(require_auth)])
 def list_sessions():
     return store.list_sessions()
 
 
-@app.get("/api/history/sessions/{session_id}")
+@app.get("/api/history/sessions/{session_id}", dependencies=[Depends(require_auth)])
 def get_session(session_id: str):
     detail = store.get_session_detail(session_id)
     if not detail:
@@ -98,8 +141,11 @@ def get_session(session_id: str):
     return detail
 
 
-@app.post("/api/conversations/{thread_id}/messages")
-def send_message(thread_id: str, body: SendMessage):
+@app.post("/api/conversations/{thread_id}/messages", dependencies=[Depends(require_auth)])
+def send_message(thread_id: str, body: SendMessage, request: Request):
+    client_ip = request.client.host if request.client else "unknown"
+    _check_rate_limit(client_ip)
+
     conv = _conversations.get(thread_id)
     if conv is None:
         raise HTTPException(status_code=404, detail="unknown conversation -- POST /api/conversations first")
