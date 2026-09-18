@@ -11,7 +11,10 @@
   --violet: #a855f7;
   --text: #dfe2f1;
   --text-dim: #8892b0;
-  --text-mute: #5a6280;
+  --text-mute: #7680a0; /* lightened from an earlier #5a6280 -- that measured ~3.4:1 against
+                            --bg, below the 4.5:1 AA floor for the body-sized hint text it's
+                            used on; this measures ~5.2:1 */
+  --focus-ring: #00e5ff;
 
   --sev-none: #22c55e;
   --sev-low: #eab308;
@@ -70,7 +73,7 @@ body {
 }
 .brand-tag { font-family: var(--font-mono); font-size: 11px; color: var(--text-mute); letter-spacing: 0.03em; }
 
-.tabs { display: flex; gap: 4px; background: var(--surface-2); border: 1px solid var(--border-dim); padding: 3px; border-radius: 3px; }
+.tabs { display: flex; flex-wrap: wrap; gap: 4px; background: var(--surface-2); border: 1px solid var(--border-dim); padding: 3px; border-radius: 3px; }
 .tab-btn {
   font-family: var(--font-display);
   font-size: 11px;
@@ -276,3 +279,30 @@ body {
 ::-webkit-scrollbar { width: 6px; height: 6px; }
 ::-webkit-scrollbar-track { background: var(--surface); }
 ::-webkit-scrollbar-thumb { background: var(--violet); border-radius: 3px; }
+
+/* ---------- accessibility ---------- */
+.visually-hidden {
+  position: absolute;
+  width: 1px; height: 1px;
+  padding: 0; margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+a:focus-visible,
+button:focus-visible,
+input:focus-visible,
+select:focus-visible,
+.session-item:focus-visible,
+.tab-btn:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+
+.session-item { outline: none; } /* focus-visible above supplies the indicator instead */
+
+@media (prefers-reduced-motion: reduce) {
+  * { transition-duration: 0.01ms !important; animation-duration: 0.01ms !important; }
+}

@@ -19,8 +19,12 @@ function badgeHtml(sev) {
 // ---------------------------------------------------------------- tabs
 document.querySelectorAll(".tab-btn").forEach((btn) => {
   btn.addEventListener("click", () => {
-    document.querySelectorAll(".tab-btn").forEach((b) => b.classList.remove("active"));
+    document.querySelectorAll(".tab-btn").forEach((b) => {
+      b.classList.remove("active");
+      b.setAttribute("aria-selected", "false");
+    });
     btn.classList.add("active");
+    btn.setAttribute("aria-selected", "true");
     document.querySelectorAll(".view").forEach((v) => v.classList.remove("active"));
     document.getElementById(`view-${btn.dataset.view}`).classList.add("active");
     if (btn.dataset.view === "history") loadHistory();
@@ -194,7 +198,7 @@ async function loadHistory() {
   list.innerHTML = sessions
     .map(
       (s) => `
-    <div class="session-item" data-id="${s.session_id}">
+    <div class="session-item" data-id="${s.session_id}" role="button" tabindex="0" aria-label="Session for ${escapeHtml(s.entity_id)}, ${s.turn_count} turns, worst severity ${s.worst_severity}">
       <div class="s-top"><span class="s-entity">${escapeHtml(s.entity_id)}</span>${badgeHtml(s.worst_severity)}</div>
       <div class="s-meta">${s.turn_count} turn(s) &middot; ${new Date(s.created_at * 1000).toLocaleString()} &middot; ${s.session_id.slice(0, 8)}</div>
     </div>`
@@ -202,6 +206,12 @@ async function loadHistory() {
     .join("");
   list.querySelectorAll(".session-item").forEach((el) => {
     el.addEventListener("click", () => selectSession(el.dataset.id, list));
+    el.addEventListener("keydown", (e) => {
+      if (e.key === "Enter" || e.key === " ") {
+        e.preventDefault();
+        selectSession(el.dataset.id, list);
+      }
+    });
   });
 }
 
