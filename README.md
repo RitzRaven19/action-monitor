@@ -52,7 +52,8 @@ copy .env.example .env        # then fill in GROQ_API_KEY (free key: console.gro
   real agent/API (evasion/persistent-tracking demos, the weighted-scoring check, the envelope
   generator comparison).
 - `integrations/` — the Claude Code hook and its coding-agent scope profile.
-- `eval/` — the AgentDojo envelope profile used by `scripts/run_agentdojo_eval.py`.
+- `eval/` — the AgentDojo envelope profile (`scripts/run_agentdojo_eval.py`) and the session-level
+  harness (`scripts/run_session_eval.py`).
 - `tests/` — pytest suite (no API key or network needed) covering the logger, envelope generator,
   judge, resource sensitivity, web search backends, the SQLite store, the HTTP layer (routing, auth
   gate, rate limiting, and full streamed turns with only the LLM stubbed), and the "agent cannot
@@ -126,6 +127,20 @@ first run into the git-ignored `state/agentdojo/`):
 ```
 python -m scripts.run_agentdojo_eval
 ```
+
+Session-level evaluation -- score any labelled multi-turn / multi-session trace set at every monitor
+level (action, run, session, identity, weighted) plus an enforce replay, to see which layer catches
+what (format in `eval/session_harness.py`). With `--from-db` it scores what the monitor itself
+recorded, e.g. your real Claude Code sessions from the hook -- a false-alarm measurement on real work:
+
+```
+python -m scripts.run_session_eval cases.json
+python -m scripts.run_session_eval --from-db state/console.db --profile claude_code
+```
+
+Published datasets checked for this (2026-09-30): none yet combines recorded agent tool calls with
+cross-session identity grouping. CSTM-Bench has the cross-session structure but text-only messages;
+AgentDojo and AgentInjectionBench are single-conversation.
 
 Tests (no API key required, mock everything below the LLM):
 
