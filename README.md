@@ -25,6 +25,7 @@ action judge caught 100%, because the agent's final answer simply never mentione
 | Demo agent (live model, live web search) | 0% false alarms on clean tasks · 100% of injected attacks caught |
 | [AgentDojo](docs/AGENTDOJO_RESULTS.md), 7,008 published traces from 8 models | enforce cuts attack success 21% → 5% (strict profile); held on 4 models never used in design |
 | GPT-4o under AgentDojo's standard attack | 48% → 14% attack success, no extra LLM calls (`tool_filter`: 7%, `repeat_user_prompt`: 28%) |
+| [Live AgentDojo pilot](docs/AGENTDOJO_LIVE_PILOT.md) (8 cases, live agent) | attacks 7/8 → 0/6, no legitimate call refused — but agents often abandoned the user's task after a refusal |
 | Real Claude Code use | false alarms found on real sessions, fixed, and re-verified on the same recorded data |
 
 ### What's distinctive
@@ -43,7 +44,7 @@ action judge caught 100%, because the agent's final answer simply never mentione
 The cross-session layers — the distinctive part — haven't been validated on external data, because no
 public benchmark yet combines recorded agent tool calls with cross-session grouping. The declared scope
 comes from keyword rules, so unusual phrasing can fool it; enforce numbers on AgentDojo are a replay of
-recorded runs, not live reruns; and an action that stays inside the declared scope (subtle sabotage) is
+recorded runs (a small live pilot agrees on security but shows a higher cost to legitimate work); and an action that stays inside the declared scope (subtle sabotage) is
 invisible to it by design. Full list: [WRITEUP.md](docs/WRITEUP.md#explicit-non-goals).
 
 ### Docs

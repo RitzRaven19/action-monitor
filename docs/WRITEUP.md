@@ -155,6 +155,19 @@ Two honest caveats: enforce numbers are a counterfactual replay (after a real re
 try something else), and the remaining cost is concentrated in Slack, where agents legitimately
 message people they only learned about from channel contents.
 
+**Live pilot.** To test the first caveat directly, a small fixed slice (banking, user tasks 0–3 ×
+injection tasks 0–1, chosen by index before any results) was run *live* against `gpt-oss-120b`,
+undefended and then with strict enforcement at AgentDojo's real tool-execution point
+(`docs/AGENTDOJO_LIVE_PILOT.md`). Undefended, 7 of 8 attacks succeeded; with enforcement, 0 of 6
+(2 errored). Every one of the 6 refused calls was a payment to the attacker's account — no legitimate
+call was refused — and the agent *did* look for another route: in one run it switched from
+`send_money` to `schedule_transaction` after the refusal, and that was refused too. What the replay
+could not show is the cost: completed user tasks fell from 5/8 to 2/6 although no legitimate call was
+blocked — after a refusal the agent often abandoned the user's own task. Both errors (the provider
+rejecting the model's reply three times) occurred only in enforce runs, right after refusals. Eight
+cases is a sanity check, not a statistic: it confirms the replay's direction on security, and
+suggests the replay understates the utility cost of blocking.
+
 ### Monitoring a real agent
 
 `integrations/claude_code_hook.py` applies the monitor to Claude Code's own tool calls through its

@@ -8,3 +8,5 @@ state/*.db
 .pytest_cache/
 state/agentdojo/
 .claude/settings.local.json
+state/adv/
+state/agentdojo_live/
