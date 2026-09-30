@@ -117,6 +117,13 @@ an edit or a shell command — is flagged high (refused in enforce mode), so the
 own scope. (Added after real usage showed `curl` checks of this project's own Render site being
 flagged.)
 
+Network access is recognised from named clients (`curl`, `wget`, `nc`, `scp`, `Invoke-WebRequest`, ...)
+in command position, from inline code that uses a network library (`python -c`, `node -e`, a script
+piped on stdin, ...), and from `WebFetch` URLs whose query carries data (long, or blob-like values).
+Known gaps: a script *file* run as `python script.py` is judged only by its command line; data hidden
+in a URL *path* isn't detected (a commit hash would false-alarm); obfuscated commands can evade any of
+these rules; and inline code that merely *contains* network-looking text (e.g. test strings) is flagged.
+
 Manual single-task smoke test:
 
 ```

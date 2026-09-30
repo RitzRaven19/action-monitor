@@ -21,7 +21,7 @@ from __future__ import annotations
 import json
 import re
 from pathlib import Path, PurePath, PurePosixPath, PureWindowsPath
-from urllib.parse import urlparse
+from urllib.parse import parse_qsl, unquote, urlparse
 
 from envelope.schema import Envelope
 
@@ -35,6 +35,20 @@ _NETWORK_CLIENT_RE = re.compile(
     r"(curl|wget|nc|ncat|netcat|scp|sftp|ftp|rsync|ssh|telnet|"
     r"invoke-webrequest|invoke-restmethod|iwr|irm)(?:\.exe)?(?=\s|$)",
     re.IGNORECASE | re.MULTILINE,
+)
+# An interpreter running code given on the command line or piped on stdin
+# ("python -c", "node -e", "python - <<EOF", "pwsh -Command", ...), in command position.
+_INLINE_INTERPRETER_RE = re.compile(
+    r"(?:^|[;|&(`\n]|\$\()\s*(?:\S*[\\/])?"
+    r"(?:python[\d.]*|py|node|deno|bun|ruby|perl|php|pwsh|powershell)(?:\.exe)?\b[^\n|;&]*?"
+    r"(?:\s-[ce]\b|\s-Command\b|\s-\s|\s-$|<<)",
+    re.IGNORECASE | re.MULTILINE,
+)
+_NETWORK_LIBRARY_RE = re.compile(
+    r"\b(?:requests\.|urllib|http\.client|httpx|aiohttp|socket\.|websocket|smtplib|ftplib|"
+    r"fetch\(|axios|https?\.request|net\.connect|Net::HTTP|LWP::|curl_exec|file_get_contents\(\s*['\"]https?|"
+    r"Invoke-WebRequest|Invoke-RestMethod|System\.Net\.)",
+    re.IGNORECASE,
 )
 _DOWNLOAD_WORDS_RE = re.compile(r"\b(?:download|curl|wget|fetch|upload|post to|send to)\b", re.IGNORECASE)
 
@@ -69,6 +83,19 @@ def file_resource(path: str, cwd: str) -> str:
     except ValueError:
         return "outside:" + normalized.as_posix()
     return "project:" + (rel.as_posix() if rel.parts else ".")
+
+
+_BLOB_RE = re.compile(r"^(?:[A-Za-z0-9+/=_-]{40,}|[0-9a-fA-F]{40,})$")
+
+
+def _carries_data(url: str) -> bool:
+    """Exfiltration-shaped URL: a long query string, or any query value that
+    looks like an encoded blob (40+ chars of base64/hex). Ordinary docs links
+    have short, readable parameters."""
+    query = urlparse(url).query
+    if len(query) > 120:
+        return True
+    return any(_BLOB_RE.match(unquote(v)) for _, v in parse_qsl(query, keep_blank_values=True))
 
 
 def _domain(url: str) -> str:
@@ -127,11 +154,20 @@ def map_tool_call(tool_name: str, tool_input: dict, cwd: str) -> tuple[str, str]
         if _NETWORK_CLIENT_RE.search(command):
             urls = _URL_RE.findall(command)
             return "network_post", "net:" + (_domain(urls[0]) if urls else command.strip()[:120])
+        if _INLINE_INTERPRETER_RE.search(command) and _NETWORK_LIBRARY_RE.search(command):
+            # Inline code (python -c, node -e, a script piped on stdin, ...) that
+            # uses a network library: network access without any named client.
+            urls = _URL_RE.findall(command)
+            return "network_post", "net:" + (_domain(urls[0]) if urls else "inline-script")
         return "execute", "cmd:" + command.strip()[:200]
     if tool_name == "WebSearch":
         return "web_search", "search:" + tool_input.get("query", "")
     if tool_name == "WebFetch":
-        return "web_fetch", "url:" + _domain(tool_input.get("url", ""))
+        url = tool_input.get("url", "")
+        if _carries_data(url):
+            # A URL that smuggles data out is a send, not a read.
+            return "network_post", "net:" + _domain(url)
+        return "web_fetch", "url:" + _domain(url)
     if tool_name in BOOKKEEPING_TOOLS:
         return None
     return external_tool_call(tool_name, tool_input)
