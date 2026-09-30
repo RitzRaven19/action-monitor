@@ -129,13 +129,24 @@ def handle(payload: dict, store: Store, identity: str, enforce: bool) -> dict | 
     return None
 
 
+def _db_path() -> Path:
+    """ACTION_MONITOR_DB if set; else, when installed as a Claude Code plugin,
+    its persistent data directory (the plugin root is replaced on every
+    update); else this repo's state/console.db, which the local console reads."""
+    if os.environ.get("ACTION_MONITOR_DB"):
+        return Path(os.environ["ACTION_MONITOR_DB"])
+    if os.environ.get("CLAUDE_PLUGIN_DATA"):
+        return Path(os.environ["CLAUDE_PLUGIN_DATA"]) / "console.db"
+    return REPO_ROOT / "state" / "console.db"
+
+
 def main() -> int:
     try:
         payload = json.load(sys.stdin)
     except (json.JSONDecodeError, ValueError):
         return 0
     try:
-        store = Store(Path(os.environ.get("ACTION_MONITOR_DB") or REPO_ROOT / "state" / "console.db"))
+        store = Store(_db_path())
         output = handle(
             payload,
             store,

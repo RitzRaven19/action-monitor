@@ -137,6 +137,19 @@ Search results come from the live Wikipedia API. Set `SEARCH_BACKEND=fixtures` f
 deterministic offline results (the test suite always uses these); if Wikipedia is unreachable the
 tool falls back to them automatically and says so in its result.
 
+**Install as a Claude Code plugin** (needs only Python 3 on your PATH — the hook uses the standard
+library alone). Inside Claude Code:
+
+```
+/plugin marketplace add RitzRaven19/action-monitor
+/plugin install action-monitor@action-monitor
+```
+
+It starts monitor-only, recording every prompt and tool call into
+`~/.claude/plugins/data/<plugin-id>/console.db`; point the console at it with `ACTION_MONITOR_DB`, or
+score it with `python -m scripts.run_session_eval --from-db <that path> --identity claude-code`. Use
+either the plugin or a manual hook (below), not both, or every call is recorded twice.
+
 **Monitor Claude Code itself.** `integrations/claude_code_hook.py` is a Claude Code hook that judges
 (and optionally blocks) Claude Code's own tool calls using a coding-agent profile: anything inside
 the project is in scope; reads/writes outside it are out-of-scope and accumulate like any other

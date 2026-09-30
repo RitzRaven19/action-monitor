@@ -1,0 +1,15 @@
+{
+  "name": "action-monitor",
+  "description": "Action Monitor: a behavior-based monitor for AI agents that judges what they do, not what they say.",
+  "owner": {
+    "name": "Ritu Dey",
+    "url": "https://github.com/RitzRaven19"
+  },
+  "plugins": [
+    {
+      "name": "action-monitor",
+      "source": "./",
+      "description": "Behavior-based monitor for Claude Code: judges tool calls against your task's scope and tracks slow scope creep. Monitor-only by default."
+    }
+  ]
+}

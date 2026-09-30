@@ -256,6 +256,20 @@ def test_tool_call_before_any_prompt_is_still_judged(store):
     assert store.get_session_detail("s1")["runs"][0]["actions"][0]["resource"] == "project:src/app.py"
 
 
+def test_db_path_precedence(monkeypatch, tmp_path):
+    """Explicit setting wins; installed as a plugin, state goes to the plugin's
+    persistent data dir (its root is replaced on every update)."""
+    from integrations import claude_code_hook as hook
+
+    monkeypatch.delenv("ACTION_MONITOR_DB", raising=False)
+    monkeypatch.delenv("CLAUDE_PLUGIN_DATA", raising=False)
+    assert hook._db_path() == hook.REPO_ROOT / "state" / "console.db"
+    monkeypatch.setenv("CLAUDE_PLUGIN_DATA", str(tmp_path))
+    assert hook._db_path() == tmp_path / "console.db"
+    monkeypatch.setenv("ACTION_MONITOR_DB", str(tmp_path / "explicit.db"))
+    assert hook._db_path() == tmp_path / "explicit.db"
+
+
 # ---------------------------------------------------------------- the real script
 
 def _run_hook(payload, env_extra, stdin=None):

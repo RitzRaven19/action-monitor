@@ -1,0 +1,13 @@
+{
+  "name": "action-monitor",
+  "displayName": "Action Monitor",
+  "version": "0.1.0",
+  "description": "Judges Claude Code's own tool calls against the scope of your task, tracks slow scope creep across turns, sessions and projects, and optionally blocks out-of-scope calls. Monitor-only by default.",
+  "author": {
+    "name": "Ritu Dey",
+    "url": "https://github.com/RitzRaven19"
+  },
+  "homepage": "https://github.com/RitzRaven19/action-monitor",
+  "repository": "https://github.com/RitzRaven19/action-monitor",
+  "keywords": ["security", "monitoring", "prompt-injection", "scope", "agents"]
+}
