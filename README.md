@@ -169,8 +169,9 @@ pytest tests/ -v
   wake up.
 
 **Optional protection, if you're sharing the link somewhere strangers might click it** (add these
-in Render's dashboard → your service → Environment, at any time — no redeploy needed, and leaving
-them unset deploys exactly as if they didn't exist):
+in Render's dashboard → your service → Environment, at any time — save with "Save, rebuild, and
+deploy", since the running app only reads them on restart; leaving them unset deploys exactly as if
+they didn't exist):
 - `ACCESS_PASSWORD` — requires an HTTP Basic password on every API call (not the page itself, so
   visitors can see the UI but can't run anything without it). Any username works; only the
   password is checked.
