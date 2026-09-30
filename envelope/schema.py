@@ -19,6 +19,10 @@ class Envelope:
     task_id: str
     allowed_tool_categories: frozenset[str]  # e.g. {"read_file", "web_search"}
     allowed_resources: tuple[str, ...]        # file paths, or namespace prefixes ending in ":" (e.g. "web:")
+    # Declared categories whose effects reach another party (money, messages,
+    # shared access). An undeclared *target* on one of these is treated like an
+    # undeclared tool: high severity, not the usual low/benign.
+    high_stakes_categories: frozenset[str] = frozenset()
 
     def resource_is_declared(self, resource: str) -> bool:
         """Exact match on normalized file paths; prefix match for namespace

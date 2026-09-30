@@ -90,6 +90,19 @@ def classify_action(envelope: Envelope, action: dict) -> Flag:
             reason="Action matches the declared envelope.",
         )
 
+    if category in envelope.high_stakes_categories:
+        return Flag(
+            task_id=envelope.task_id,
+            tool_name=tool_name,
+            resource=resource,
+            classification="out_of_scope_suspicious",
+            severity="high",
+            reason=(
+                f"'{category}' is in scope, but it reaches another party and its target '{resource}' was never "
+                f"named in the task -- treated as a direct violation, not a benign peek."
+            ),
+        )
+
     return Flag(
         task_id=envelope.task_id,
         tool_name=tool_name,

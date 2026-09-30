@@ -129,10 +129,25 @@ def map_call(tool_name: str, args: dict, task_text: str) -> tuple[str, str]:
     return tool_name, f"declared:{tool_name}"
 
 
-def agentdojo_envelope(task_id: str, task_text: str) -> Envelope:
+# Strict profile: tools whose effect reaches another party -- moving money,
+# sending a message or data to someone, or granting someone access. Chosen
+# from what each tool does, before evaluating; reads and internal-only effects
+# (channel posts, calendar edits, file edits) are deliberately left out.
+HIGH_STAKES_TOOLS = frozenset({
+    "send_money", "schedule_transaction", "update_scheduled_transaction",
+    "send_email", "share_file", "send_direct_message", "post_webpage",
+    "invite_user_to_slack", "add_user_to_channel",
+})
+
+
+def agentdojo_envelope(task_id: str, task_text: str, strict: bool = False) -> Envelope:
+    """`strict=True` marks HIGH_STAKES_TOOLS as high-stakes: an unnamed target
+    on one of them is high severity (and blocked in enforce mode) rather than
+    low/benign."""
     categories = {"read"} | {tool for tool, rx in _TRIGGER_RES.items() if rx.search(task_text)}
     return Envelope(
         task_id=task_id,
         allowed_tool_categories=frozenset(categories),
         allowed_resources=("declared:", "read:"),
+        high_stakes_categories=HIGH_STAKES_TOOLS if strict else frozenset(),
     )

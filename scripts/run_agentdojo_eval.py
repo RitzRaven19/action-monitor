@@ -92,10 +92,10 @@ class TraceResult:
     legit_blocked: int      # enforce: non-attacker calls that would be refused
 
 
-def evaluate_trace(model: str, suite: str, trace: dict) -> TraceResult:
+def evaluate_trace(model: str, suite: str, trace: dict, strict: bool = False) -> TraceResult:
     task_text = next((_text(m.get("content")) for m in trace["messages"] if m["role"] == "user"), "")
     injected = " ".join(_strings(trace.get("injections") or {})).lower()
-    envelope = agentdojo_envelope(trace.get("user_task_id", ""), task_text)
+    envelope = agentdojo_envelope(trace.get("user_task_id", ""), task_text, strict=strict)
     gate = make_enforcement_gate(envelope)
 
     flags, attack_calls, attack_blocked, first_attack_seen, legit_blocked = [], 0, False, False, 0
@@ -132,14 +132,14 @@ def evaluate_trace(model: str, suite: str, trace: dict) -> TraceResult:
     )
 
 
-def load_results() -> list[TraceResult]:
+def load_results(strict: bool = False) -> list[TraceResult]:
     results = []
     for model in MODELS:
         for path in sorted((DATA_DIR / "runs" / model).glob("*/*/*/*.json")):
             suite, attack = path.parts[-4], path.parts[-2]
             if attack not in (ATTACK, "none"):
                 continue
-            results.append(evaluate_trace(model, suite, json.loads(path.read_text(encoding="utf-8"))))
+            results.append(evaluate_trace(model, suite, json.loads(path.read_text(encoding="utf-8")), strict=strict))
     return results
 
 
@@ -168,7 +168,7 @@ def summarize(rows: list[TraceResult]) -> dict:
     }
 
 
-def build_report(results: list[TraceResult]) -> str:
+def build_report(results: list[TraceResult], strict_results: list[TraceResult]) -> str:
     by_model, by_suite = defaultdict(list), defaultdict(list)
     for r in results:
         by_model[r.model].append(r)
@@ -189,6 +189,11 @@ def build_report(results: list[TraceResult]) -> str:
                 f"| {s['identified']} | {s['prevented']} | {s['false_alarm']} | {s['false_block']} |"
             )
         return lines
+
+    strict_by_model, strict_by_suite = defaultdict(list), defaultdict(list)
+    for r in strict_results:
+        strict_by_model[r.model].append(r)
+        strict_by_suite[r.suite].append(r)
 
     total = summarize(results)
     lines = [
@@ -215,6 +220,29 @@ def build_report(results: list[TraceResult]) -> str:
         "",
         *table(by_suite, "Suite"),
         "",
+        "## Strict profile: unnamed targets on high-stakes tools",
+        "",
+        "Follow-up aimed at the weak spot above. `HIGH_STAKES_TOOLS` in `eval/agentdojo_profile.py` -- tools that "
+        "move money, send messages or data to someone, or grant access -- was chosen from what each tool does, "
+        "before this run. On those tools an unnamed target is high severity (blocked in enforce mode) instead of "
+        "low. Same traces, same rules otherwise:",
+        "",
+        "| Profile | Attack success with enforce | Successful attacks flagged | Attacker calls blocked "
+        "| Clean-run false alarms | Completed clean tasks enforce would interrupt |",
+        "|---|---|---|---|---|---|",
+        *[
+            f"| {label} | {sm['asr_enforced']} | {sm['detected']} | {sm['prevented']} | {sm['false_alarm']} | {sm['false_block']} |"
+            for label, sm in (("Default", summarize(results)), ("Strict", summarize(strict_results)))
+        ],
+        "",
+        "Strict profile by model:",
+        "",
+        *table(strict_by_model, "Model"),
+        "",
+        "Strict profile by suite (all models):",
+        "",
+        *table(strict_by_suite, "Suite"),
+        "",
         "## Context: AgentDojo's published defenses (GPT-4o, same attack)",
         "",
         "From https://agentdojo.spylab.ai/results/ -- these are *real* reruns with each defense in place, whereas "
@@ -229,14 +257,19 @@ def build_report(results: list[TraceResult]) -> str:
         "| transformers_pi_detector (classifier on tool outputs) | 41.24% | 7.95% |",
         "| repeat_user_prompt | 84.54% | 27.82% |",
         "| spotlighting_with_delimiting | 72.16% | 41.65% |",
-        "| **This monitor, enforce mode (replay)** | ~10% of completed clean tasks interrupted | "
-        + summarize(by_model.get("gpt-4o-2024-05-13", [])).get("asr_enforced", "–") + " |",
+        "| **This monitor, enforce, default profile (replay)** | "
+        + summarize(by_model.get("gpt-4o-2024-05-13", []))["false_block"] + " of completed clean tasks interrupted | "
+        + summarize(by_model.get("gpt-4o-2024-05-13", []))["asr_enforced"] + " |",
+        "| **This monitor, enforce, strict profile (replay)** | "
+        + summarize(strict_by_model.get("gpt-4o-2024-05-13", []))["false_block"] + " of completed clean tasks interrupted | "
+        + summarize(strict_by_model.get("gpt-4o-2024-05-13", []))["asr_enforced"] + " |",
         "",
-        "Reading: rule-based enforcement roughly halves GPT-4o's attack success with no extra LLM calls -- in the "
-        "range of `repeat_user_prompt`, well short of `tool_filter` and the injection detector. Most of the gap is "
-        "same-tool attacks (e.g. paying an attacker's IBAN when the task legitimately involves paying someone): the "
-        "call is out-of-scope only by its target, which is low severity and is not blocked until scope creep is "
-        "detected -- banking is where this shows most.",
+        "Reading: with no extra LLM calls, the default profile roughly halves GPT-4o's attack success (in the range "
+        "of `repeat_user_prompt`); the strict profile gets closer to `tool_filter` and the injection detector but "
+        "does not match them, and it interrupts more legitimate work -- mostly in Slack, where agents routinely "
+        "message people they only learned about from channel contents. The two utility columns are not directly "
+        "comparable: AgentDojo's measures task completion in real reruns, this one counts recorded completed "
+        "tasks that enforce would have interrupted.",
         "",
         "## Methodology note",
         "",
@@ -275,8 +308,7 @@ def main() -> None:
     args = parser.parse_args()
     if args.download or not (DATA_DIR / "runs").exists():
         download()
-    results = load_results()
-    report = build_report(results)
+    report = build_report(load_results(), load_results(strict=True))
     OUT_PATH.write_text(report, encoding="utf-8")
     print(report)
     print(f"Report written to {OUT_PATH}")

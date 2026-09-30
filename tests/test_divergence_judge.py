@@ -249,3 +249,20 @@ def test_gate_blocks_benign_immediately_when_escalated():
     gate = make_enforcement_gate(READ_ONLY_ENVELOPE, escalated=True)
     assert "scope creep has already been detected" in gate("read_file", "data/other.txt")
     assert gate("read_file", "data/notes.txt") is None
+
+
+def test_high_stakes_category_escalates_unnamed_target_to_high():
+    env = Envelope(
+        task_id="t",
+        allowed_tool_categories=frozenset({"send_money", "read_file"}),
+        allowed_resources=("declared:",),
+        high_stakes_categories=frozenset({"send_money"}),
+    )
+    assert classify_action(env, _action("send_money", "declared:send_money")).severity == "none"
+    assert classify_action(env, _action("send_money", "undeclared:US1330")).classification == "out_of_scope_suspicious"
+    assert classify_action(env, _action("read_file", "other.txt")).severity == "low"  # non-high-stakes unchanged
+    assert make_enforcement_gate(env)("send_money", "undeclared:US1330") is not None  # blocked straight away
+
+
+def test_envelopes_default_to_no_high_stakes_categories():
+    assert READ_ONLY_ENVELOPE.high_stakes_categories == frozenset()
