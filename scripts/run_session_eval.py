@@ -23,6 +23,7 @@ def main() -> None:
     parser.add_argument("cases", type=Path, nargs="?")
     parser.add_argument("--from-db", type=Path, help="score sessions recorded in this monitor database instead")
     parser.add_argument("--label", default="benign", help="label for --from-db cases (default: benign)")
+    parser.add_argument("--identity", help="with --from-db, only this identity (e.g. claude-code)")
     parser.add_argument("--profile", choices=sorted(PROFILES), help="overrides the file's own profile")
     parser.add_argument("--out", type=Path)
     args = parser.parse_args()
@@ -30,6 +31,8 @@ def main() -> None:
     if args.from_db:
         # Recorded actions are already mapped, so the profile only decides how envelopes are built.
         cases, profile, source = cases_from_store(Store(args.from_db), args.label), args.profile or "claude_code", args.from_db.name
+        if args.identity:
+            cases = [c for c in cases if c["case_id"] == args.identity]
     elif args.cases:
         file_profile, cases = load_cases(args.cases)
         profile, source = args.profile or file_profile, args.cases.name

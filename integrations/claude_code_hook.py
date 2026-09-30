@@ -26,7 +26,7 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT))
 
-from integrations.claude_code import coding_envelope, map_tool_call  # noqa: E402
+from integrations.claude_code import allowed_hosts, coding_envelope, map_tool_call  # noqa: E402
 from judge.divergence_judge import (  # noqa: E402
     classify_action,
     detect_persistent_scope_creep,
@@ -79,7 +79,7 @@ def handle(payload: dict, store: Store, identity: str, enforce: bool) -> dict | 
         store.create_run(f"{session_id}_0", session_id, 0, "", "", enforce=enforce)
         runs = store.session_runs(session_id)
     run_id = runs[-1]["run_id"]
-    envelope = coding_envelope(session_id, [r["declared_prompt"] for r in runs])
+    envelope = coding_envelope(session_id, [r["declared_prompt"] for r in runs], allowed_hosts(cwd))
 
     flag = classify_action(envelope, {"tool_name": category, "resource": resource})
     flags_by_run = store.session_flags_by_run(session_id)

@@ -222,7 +222,7 @@ class Store:
                 LEFT JOIN runs r ON r.session_id = s.session_id
                 LEFT JOIN flags f ON f.run_id = r.run_id
                 GROUP BY s.session_id
-                ORDER BY s.created_at DESC
+                ORDER BY s.created_at DESC, s.rowid DESC  -- rowid breaks same-clock-tick ties (Windows ~16ms)
                 LIMIT ?
                 """,
                 (limit,),

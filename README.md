@@ -110,6 +110,13 @@ variables): `ACTION_MONITOR_ENFORCE=1` to deny instead of only record, `ACTION_M
 sessions appear in the local console's History tab). The hook only ever denies, never auto-approves,
 so Claude Code's normal permission prompts still apply; any internal error lets the call through.
 
+Hosts your project legitimately talks to (your own deployment, say) go in `.claude/action-monitor.json`
+as `{"allowed_hosts": ["myapp.onrender.com"]}`; direct network calls to them are in scope, and to any
+other host they're high severity. Write that file yourself: any agent attempt to modify it — through
+an edit or a shell command — is flagged high (refused in enforce mode), so the agent can't widen its
+own scope. (Added after real usage showed `curl` checks of this project's own Render site being
+flagged.)
+
 Manual single-task smoke test:
 
 ```
@@ -136,7 +143,7 @@ recorded, e.g. your real Claude Code sessions from the hook -- a false-alarm mea
 
 ```
 python -m scripts.run_session_eval cases.json
-python -m scripts.run_session_eval --from-db state/console.db --profile claude_code
+python -m scripts.run_session_eval --from-db state/console.db --profile claude_code --identity claude-code
 ```
 
 Published datasets checked for this (2026-09-30): none yet combines recorded agent tool calls with

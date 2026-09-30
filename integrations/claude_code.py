@@ -18,8 +18,9 @@ Pure functions only; integrations/claude_code_hook.py does the I/O.
 """
 from __future__ import annotations
 
+import json
 import re
-from pathlib import PurePath, PurePosixPath, PureWindowsPath
+from pathlib import Path, PurePath, PurePosixPath, PureWindowsPath
 from urllib.parse import urlparse
 
 from envelope.schema import Envelope
@@ -69,6 +70,25 @@ def _domain(url: str) -> str:
     return (urlparse(url).hostname or url).lower()
 
 
+CONFIG_RELPATH = ".claude/action-monitor.json"
+
+
+def load_project_config(cwd: str) -> dict:
+    """The user's own declarations for this project, e.g.
+    {"allowed_hosts": ["myapp.onrender.com"]} in .claude/action-monitor.json.
+    Missing or unreadable -> {} (nothing extra declared)."""
+    try:
+        data = json.loads((Path(cwd) / CONFIG_RELPATH).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def allowed_hosts(cwd: str) -> list[str]:
+    hosts = load_project_config(cwd).get("allowed_hosts") or []
+    return [str(h).strip().lower() for h in hosts if str(h).strip()]
+
+
 def map_tool_call(tool_name: str, tool_input: dict, cwd: str) -> tuple[str, str] | None:
     """(category, resource) for a Claude Code tool call, or None for tools the
     monitor doesn't judge (task lists, sub-agent plumbing, etc.)."""
@@ -79,9 +99,15 @@ def map_tool_call(tool_name: str, tool_input: dict, cwd: str) -> tuple[str, str]
             path = tool_input.get("pattern", "")
         return "read_file", file_resource(path, cwd)
     if tool_name in WRITE_TOOLS:
-        return "write_file", file_resource(path, cwd)
+        resource = file_resource(path, cwd)
+        if resource == "project:" + CONFIG_RELPATH:
+            # The agent must not widen its own scope: "monitor_config" is never declared.
+            return "monitor_config", resource
+        return "write_file", resource
     if tool_name == "Bash" or tool_name == "PowerShell":
         command = tool_input.get("command", "")
+        if "action-monitor.json" in command:
+            return "monitor_config", "cmd:" + command.strip()[:200]
         if _NETWORK_CLIENT_RE.search(command):
             urls = _URL_RE.findall(command)
             return "network_post", "net:" + (_domain(urls[0]) if urls else command.strip()[:120])
@@ -93,17 +119,22 @@ def map_tool_call(tool_name: str, tool_input: dict, cwd: str) -> tuple[str, str]
     return None
 
 
-def coding_envelope(session_id: str, declared_prompts: list[str]) -> Envelope:
+def coding_envelope(session_id: str, declared_prompts: list[str], hosts: list[str] | tuple[str, ...] = ()) -> Envelope:
     """Cumulative envelope for a Claude Code session, built from the user's
-    own prompts only (never from tool output -- same discipline as the demo)."""
+    own prompts plus the hosts the user declared in the project config
+    (never from tool output -- same discipline as the demo).
+
+    network_post is high-stakes: a direct network call to a host that
+    neither the prompts nor the project config name is high severity even
+    when some other host is declared."""
     text = "\n".join(declared_prompts)
     categories = set(ALWAYS_DECLARED)
-    domains = {f"url:{_domain(u)}" for u in _URL_RE.findall(text)}
-    net_hosts = {f"net:{_domain(u)}" for u in _URL_RE.findall(text)}
-    if domains or _DOWNLOAD_WORDS_RE.search(text):
+    named = {_domain(u) for u in _URL_RE.findall(text)} | {h.lower() for h in hosts}
+    if named or _DOWNLOAD_WORDS_RE.search(text):
         categories.add("network_post")
     return Envelope(
         task_id=session_id,
         allowed_tool_categories=frozenset(categories),
-        allowed_resources=tuple(sorted({"project:", "cmd:", "search:"} | domains | net_hosts)),
+        allowed_resources=tuple(sorted({"project:", "cmd:", "search:"} | {f"url:{h}" for h in named} | {f"net:{h}" for h in named})),
+        high_stakes_categories=frozenset({"network_post"}),
     )

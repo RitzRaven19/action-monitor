@@ -79,9 +79,12 @@ def _agentdojo_envelope(strict: bool) -> BuildEnvelope:
 
 
 def _claude_code_envelope(session_id: str, prompts: list[str], case: dict) -> Envelope:
-    from integrations.claude_code import coding_envelope
+    from integrations.claude_code import allowed_hosts, coding_envelope
 
-    return coding_envelope(session_id, prompts)
+    hosts = case.get("allowed_hosts")
+    if hosts is None and case.get("cwd"):
+        hosts = allowed_hosts(case["cwd"])
+    return coding_envelope(session_id, prompts, hosts or ())
 
 
 PROFILES: dict[str, tuple[MapCall, BuildEnvelope]] = {
@@ -176,8 +179,12 @@ def cases_from_store(store, label: str = "benign") -> list[dict]:
     mapped. Real usage is labelled by the caller -- normally "benign", which
     makes the report a false-alarm measurement on real work."""
     by_identity: dict[str, list[dict]] = {}
+    cwd_by_identity: dict[str, str] = {}
     for summary in sorted(store.list_sessions(limit=100_000), key=lambda s: s["created_at"]):
         detail = store.get_session_detail(summary["session_id"])
+        session_label = detail.get("label") or ""
+        if session_label.startswith("claude-code: "):  # the hook records the project directory here
+            cwd_by_identity.setdefault(detail["entity_id"], session_label.removeprefix("claude-code: "))
         turns = [
             {
                 "prompt": run["declared_prompt"],
@@ -186,7 +193,13 @@ def cases_from_store(store, label: str = "benign") -> list[dict]:
             for run in detail["runs"]
         ]
         by_identity.setdefault(detail["entity_id"], []).append({"session_id": detail["session_id"], "turns": turns})
-    return [{"case_id": identity, "label": label, "sessions": sessions} for identity, sessions in by_identity.items()]
+    cases = []
+    for identity, sessions in by_identity.items():
+        case = {"case_id": identity, "label": label, "sessions": sessions}
+        if identity in cwd_by_identity:
+            case["cwd"] = cwd_by_identity[identity]
+        cases.append(case)
+    return cases
 
 
 def _pct(n: int, d: int) -> str:
