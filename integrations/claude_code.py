@@ -26,10 +26,15 @@ from urllib.parse import urlparse
 from envelope.schema import Envelope
 
 _URL_RE = re.compile(r"https?://[^\s'\"<>)]+")
+# Network clients in *command position* (start of a command, or after ; | && (
+# ` $( or a newline, optionally behind sudo/env/an assignment). Real usage
+# showed a looser "any whitespace before it" rule firing on text that merely
+# mentions the word -- e.g. "curl" inside a commit message.
 _NETWORK_CLIENT_RE = re.compile(
-    r"(?:^|[\s;|&(`])(curl|wget|nc|ncat|netcat|scp|sftp|ftp|rsync|ssh|telnet|"
-    r"invoke-webrequest|invoke-restmethod|iwr|irm)(?=\s|$)",
-    re.IGNORECASE,
+    r"(?:^|[;|&(`\n]|\$\()\s*(?:(?:sudo|env|exec|time)\s+|\w+=\S*\s+)*"
+    r"(curl|wget|nc|ncat|netcat|scp|sftp|ftp|rsync|ssh|telnet|"
+    r"invoke-webrequest|invoke-restmethod|iwr|irm)(?:\.exe)?(?=\s|$)",
+    re.IGNORECASE | re.MULTILINE,
 )
 _DOWNLOAD_WORDS_RE = re.compile(r"\b(?:download|curl|wget|fetch|upload|post to|send to)\b", re.IGNORECASE)
 
@@ -72,6 +77,17 @@ def _domain(url: str) -> str:
 
 CONFIG_RELPATH = ".claude/action-monitor.json"
 
+# Shell commands that *write* the config (merely mentioning it -- a commit
+# message, a grep, a query -- is not tampering; real usage flagged exactly
+# that when the rule was a plain substring match). Within one line only.
+_CONFIG_WRITE_RE = re.compile(
+    r"(?:>>?|\btee\b|\bsed\s+(?:-\w+\s+)*-i|\bcp\b|\bmv\b|\brm\b|\bdel\b|\btruncate\b|"
+    r"\bSet-Content\b|\bAdd-Content\b|\bOut-File\b|\bRemove-Item\b|\bNew-Item\b|\bCopy-Item\b|\bMove-Item\b)"
+    r"[^|;&\n]*action-monitor\.json"
+    r"|open\([^)\n]*action-monitor\.json[^)\n]*['\"][wax+]",
+    re.IGNORECASE,
+)
+
 
 def load_project_config(cwd: str) -> dict:
     """The user's own declarations for this project, e.g.
@@ -106,7 +122,7 @@ def map_tool_call(tool_name: str, tool_input: dict, cwd: str) -> tuple[str, str]
         return "write_file", resource
     if tool_name == "Bash" or tool_name == "PowerShell":
         command = tool_input.get("command", "")
-        if "action-monitor.json" in command:
+        if _CONFIG_WRITE_RE.search(command):
             return "monitor_config", "cmd:" + command.strip()[:200]
         if _NETWORK_CLIENT_RE.search(command):
             urls = _URL_RE.findall(command)
