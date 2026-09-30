@@ -47,6 +47,7 @@ copy .env.example .env        # then fill in GROQ_API_KEY (free key: console.gro
 - `scripts/` — live (non-pytest) end-to-end smoke tests and research comparisons that exercise the
   real agent/API (evasion/persistent-tracking demos, the weighted-scoring check, the envelope
   generator comparison).
+- `integrations/` — the Claude Code hook and its coding-agent scope profile.
 - `tests/` — pytest suite (no API key or network needed) covering the logger, envelope generator,
   judge, resource sensitivity, web search backends, the SQLite store, the HTTP layer (routing, auth
   gate, rate limiting, and full streamed turns with only the LLM stubbed), and the "agent cannot
@@ -88,6 +89,19 @@ lists every session recorded in SQLite, and exports any session as JSON.
 Search results come from the live Wikipedia API. Set `SEARCH_BACKEND=fixtures` for the old
 deterministic offline results (the test suite always uses these); if Wikipedia is unreachable the
 tool falls back to them automatically and says so in its result.
+
+**Monitor Claude Code itself.** `integrations/claude_code_hook.py` is a Claude Code hook that judges
+(and optionally blocks) Claude Code's own tool calls using a coding-agent profile: anything inside
+the project is in scope; reads/writes outside it are out-of-scope and accumulate like any other
+benign access; shell commands are in scope except direct network clients (`curl`, `wget`, `nc`,
+`scp`, `Invoke-WebRequest`, ...), which count as `network_post` unless your prompt names a URL or
+asks for a download; `WebFetch` is in scope only for domains your prompt names. To enable it for a
+project, copy the `hooks` block from `integrations/claude_code_settings.example.json` into that
+project's `.claude/settings.json`, with the paths pointed at this repo. Settings (environment
+variables): `ACTION_MONITOR_ENFORCE=1` to deny instead of only record, `ACTION_MONITOR_IDENTITY`
+(default `claude-code`), and `ACTION_MONITOR_DB` (default: this repo's `state/console.db`, so the
+sessions appear in the local console's History tab). The hook only ever denies, never auto-approves,
+so Claude Code's normal permission prompts still apply; any internal error lets the call through.
 
 Manual single-task smoke test:
 

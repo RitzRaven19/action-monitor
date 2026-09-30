@@ -147,6 +147,41 @@ class Store:
                 (run_id, scope, flag.tool_name, flag.resource, flag.classification, flag.severity, flag.reason),
             )
 
+    # --- per-session readback (for callers with no in-memory state, e.g. hooks) ---
+
+    def session_runs(self, session_id: str) -> list[dict]:
+        with self._connect() as conn:
+            rows = conn.execute(
+                "SELECT run_id, turn_index, declared_prompt FROM runs WHERE session_id = ? ORDER BY turn_index ASC",
+                (session_id,),
+            ).fetchall()
+        return [dict(r) for r in rows]
+
+    def session_flags_by_run(self, session_id: str, scope: str = "action") -> list[list[Flag]]:
+        """Every run's flags of one scope, in turn order -- the input shape
+        detect_session_scope_creep expects."""
+        with self._connect() as conn:
+            rows = conn.execute(
+                "SELECT r.run_id, f.tool_name, f.resource, f.classification, f.severity, f.reason "
+                "FROM runs r LEFT JOIN flags f ON f.run_id = r.run_id AND f.scope = ? "
+                "WHERE r.session_id = ? ORDER BY r.turn_index ASC, f.id ASC",
+                (scope, session_id),
+            ).fetchall()
+        by_run: dict[str, list[Flag]] = {}
+        for r in rows:
+            run_flags = by_run.setdefault(r["run_id"], [])
+            if r["classification"] is not None:
+                run_flags.append(Flag(session_id, r["tool_name"], r["resource"], r["classification"], r["severity"], r["reason"]))
+        return list(by_run.values())
+
+    def session_has_flag(self, session_id: str, scope: str) -> bool:
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT 1 FROM flags f JOIN runs r ON r.run_id = f.run_id WHERE r.session_id = ? AND f.scope = ? LIMIT 1",
+                (session_id, scope),
+            ).fetchone()
+        return row is not None
+
     # --- entity resources (persistent tracking) ---
 
     def record_entity_resources(self, entity_id: str, resources: list[str], run_id: str = "") -> None:

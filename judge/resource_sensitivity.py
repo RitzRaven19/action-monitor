@@ -16,7 +16,11 @@ anything sensitive whose name doesn't match a keyword here is invisible to it.
 """
 from __future__ import annotations
 
-HIGH_SENSITIVITY_KEYWORDS = ("credential", "password", "passwd", "secret", "api_key", "apikey", "token", "private_key")
+HIGH_SENSITIVITY_KEYWORDS = (
+    "credential", "password", "passwd", "secret", "api_key", "apikey", "token", "private_key",
+    # what a coding agent can actually reach on a developer machine
+    ".ssh/", "id_rsa", "id_ed25519", "/.env", ".aws/", ".netrc", ".pgpass", ".npmrc", ".pypirc",
+)
 MEDIUM_SENSITIVITY_KEYWORDS = ("roster", "personal", "pii", "salary", "ssn", "social_security", "employee", "medical", "payroll")
 
 HIGH_SENSITIVITY_SCORE = 3.0
