@@ -116,7 +116,51 @@ def map_tool_call(tool_name: str, tool_input: dict, cwd: str) -> tuple[str, str]
         return "web_search", "search:" + tool_input.get("query", "")
     if tool_name == "WebFetch":
         return "web_fetch", "url:" + _domain(tool_input.get("url", ""))
-    return None
+    if tool_name in BOOKKEEPING_TOOLS:
+        return None
+    return external_tool_call(tool_name, tool_input)
+
+
+# Claude Code's own plumbing: no effect outside the session (a sub-agent's
+# tool calls reach the hook separately, so the launcher itself is skipped).
+BOOKKEEPING_TOOLS = frozenset({
+    "TodoWrite", "Task", "Agent", "AskUserQuestion", "ToolSearch", "Skill", "EnterPlanMode",
+    "ExitPlanMode", "ListAgents", "SendMessage", "TaskStop", "ScheduleWakeup", "Monitor",
+})
+_SIDE_EFFECT_NAME_RE = re.compile(
+    r"(send|share|post|publish|delete|trash|remove|create|update|write|upload|execute|apply|deploy|"
+    r"merge|invite|pay|transfer|respond|reply|forward)",
+    re.IGNORECASE,
+)
+_GENERIC_TOKENS = {"mcp", "claude", "ai", "api", "server", "tool", "tools"}
+
+
+def _service_token(tool_name: str) -> str:
+    """The service an external tool belongs to, as a user would say it:
+    "mcp__claude_ai_Google_Drive__share_file" -> "drive", "Artifact" -> "artifact"."""
+    server = tool_name.split("__")[1] if tool_name.startswith("mcp__") and tool_name.count("__") >= 2 else tool_name
+    tokens = [t for t in re.split(r"[^a-z0-9]+", server.lower()) if t and t not in _GENERIC_TOKENS]
+    return tokens[-1] if tokens else server.lower()
+
+
+# Built-in tools that publish outside the session, whose effect is picked by an
+# `action` argument rather than by the tool's name.
+_OUTBOUND_BY_ACTION_ARG = {"Artifact": {"read", "list", "open", "quickstart"}}
+
+
+def external_tool_call(tool_name: str, tool_input: dict | None = None) -> tuple[str, str]:
+    """MCP servers and other outside tools: `external_action` when the call
+    changes something outside (sending, sharing, publishing, deleting, ...),
+    else `external_read`. Resource is "tool:<service>:<tool>", in scope only
+    when the user's prompt mentions that service."""
+    action = tool_name.split("__")[-1]
+    if tool_name in _OUTBOUND_BY_ACTION_ARG:
+        arg = str((tool_input or {}).get("action") or "publish").lower()
+        category = "external_read" if arg in _OUTBOUND_BY_ACTION_ARG[tool_name] else "external_action"
+        action = f"{action}.{arg}"
+    else:
+        category = "external_action" if _SIDE_EFFECT_NAME_RE.search(action) else "external_read"
+    return category, f"tool:{_service_token(tool_name)}:{action.lower()}"
 
 
 def coding_envelope(session_id: str, declared_prompts: list[str], hosts: list[str] | tuple[str, ...] = ()) -> Envelope:
@@ -128,13 +172,18 @@ def coding_envelope(session_id: str, declared_prompts: list[str], hosts: list[st
     neither the prompts nor the project config name is high severity even
     when some other host is declared."""
     text = "\n".join(declared_prompts)
-    categories = set(ALWAYS_DECLARED)
+    categories = set(ALWAYS_DECLARED) | {"external_read", "external_action"}
     named = {_domain(u) for u in _URL_RE.findall(text)} | {h.lower() for h in hosts}
     if named or _DOWNLOAD_WORDS_RE.search(text):
         categories.add("network_post")
+    # Every word of the prompt declares that service for external tools
+    # ("send it with gmail" -> tool:gmail:...); unmentioned services aren't.
+    services = {f"tool:{w}:" for w in re.findall(r"[a-z0-9]{3,}", text.lower()) if w not in _GENERIC_TOKENS}
     return Envelope(
         task_id=session_id,
         allowed_tool_categories=frozenset(categories),
-        allowed_resources=tuple(sorted({"project:", "cmd:", "search:"} | {f"url:{h}" for h in named} | {f"net:{h}" for h in named})),
-        high_stakes_categories=frozenset({"network_post"}),
+        allowed_resources=tuple(sorted(
+            {"project:", "cmd:", "search:"} | {f"url:{h}" for h in named} | {f"net:{h}" for h in named} | services
+        )),
+        high_stakes_categories=frozenset({"network_post", "external_action"}),
     )

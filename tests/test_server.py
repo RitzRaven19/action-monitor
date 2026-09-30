@@ -143,6 +143,27 @@ def test_rate_limit_keyed_by_client_host(monkeypatch):
     server._check_rate_limit("10.0.0.2")  # a different IP has its own, untouched budget
 
 
+def _fake_request(peer, forwarded=None):
+    from types import SimpleNamespace
+
+    headers = {"x-forwarded-for": forwarded} if forwarded else {}
+    return SimpleNamespace(client=SimpleNamespace(host=peer), headers=headers)
+
+
+def test_client_ip_ignores_forwarded_header_unless_trusted(monkeypatch):
+    monkeypatch.delenv("TRUST_PROXY_HEADERS", raising=False)
+    assert server._client_ip(_fake_request("10.0.0.9", "1.2.3.4")) == "10.0.0.9"  # header not trusted by default
+
+
+def test_client_ip_behind_proxy_uses_rightmost_hop(monkeypatch):
+    """Behind Render every request's peer is the proxy, so without this every
+    visitor shared one budget. The rightmost X-Forwarded-For hop is what the
+    proxy saw; leftmost entries are client-supplied and forgeable."""
+    monkeypatch.setenv("TRUST_PROXY_HEADERS", "1")
+    assert server._client_ip(_fake_request("10.0.0.9", "6.6.6.6, 203.0.113.7")) == "203.0.113.7"
+    assert server._client_ip(_fake_request("10.0.0.9")) == "10.0.0.9"  # no header -> peer
+
+
 # ---------------------------------------------------------------- access gate
 
 def test_access_gate_off_by_default(client):

@@ -74,6 +74,31 @@ def test_declared_hosts_are_in_scope_and_others_are_high():
     assert classify_action(env, {"tool_name": other[0], "resource": other[1]}).severity == "high"
 
 
+@pytest.mark.parametrize(
+    "tool, tool_input, prompt, severity",
+    [
+        ("mcp__claude_ai_Gmail__send_email", {}, "Fix the README", "high"),        # outbound, service never mentioned
+        ("mcp__claude_ai_Gmail__send_email", {}, "Send the update with Gmail", "none"),
+        ("mcp__claude_ai_Google_Drive__search_files", {}, "Fix the README", "low"),  # a read: accumulates
+        ("mcp__claude_ai_Google_Drive__share_file", {}, "Share it on Google Drive", "none"),
+        ("Artifact", {"file_path": "x.html"}, "Fix the README", "high"),            # publishing by default
+        ("Artifact", {"action": "read"}, "Fix the README", "low"),
+    ],
+)
+def test_external_tools_are_judged_not_ignored(tool, tool_input, prompt, severity):
+    """Found by audit: MCP tools and Artifact mapped to None -- sending email or
+    publishing a page was invisible to the monitor."""
+    from judge.divergence_judge import classify_action
+
+    category, resource = map_tool_call(tool, tool_input, CWD)
+    assert classify_action(coding_envelope("s", [prompt]), {"tool_name": category, "resource": resource}).severity == severity
+
+
+def test_bookkeeping_tools_stay_ignored():
+    assert map_tool_call("TodoWrite", {"todos": []}, CWD) is None
+    assert map_tool_call("Agent", {"prompt": "x"}, CWD) is None  # its own tool calls reach the hook separately
+
+
 def test_agent_cannot_widen_its_own_scope():
     assert map_tool_call("Write", {"file_path": f"{CWD}/.claude/action-monitor.json"}, CWD)[0] == "monitor_config"
     assert map_tool_call("Bash", {"command": "echo '{}' > .claude/action-monitor.json"}, CWD)[0] == "monitor_config"

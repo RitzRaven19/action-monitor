@@ -80,6 +80,20 @@ RATE_LIMIT_WINDOW_SECONDS = int(os.environ.get("RATE_LIMIT_WINDOW_SECONDS", "600
 _message_timestamps: dict[str, list[float]] = defaultdict(list)
 
 
+def _client_ip(request: Request) -> str:
+    """Who to rate-limit. Behind a reverse proxy (Render), request.client is
+    the proxy itself, so every visitor would share one budget; with
+    TRUST_PROXY_HEADERS set, use the *rightmost* X-Forwarded-For entry -- the
+    address the proxy itself saw. (Leftmost entries are client-supplied and
+    trivially forged, which is why uvicorn's trust-everything mode isn't used.)"""
+    if os.environ.get("TRUST_PROXY_HEADERS", "").strip().lower() in {"1", "true", "yes"}:
+        forwarded = request.headers.get("x-forwarded-for", "")
+        hops = [h.strip() for h in forwarded.split(",") if h.strip()]
+        if hops:
+            return hops[-1]
+    return request.client.host if request.client else "unknown"
+
+
 def _check_rate_limit(client_ip: str) -> None:
     now = time.time()
     window_start = now - RATE_LIMIT_WINDOW_SECONDS
@@ -180,8 +194,7 @@ def export_session(session_id: str):
 
 @app.post("/api/conversations/{thread_id}/messages", dependencies=[Depends(require_auth)])
 def send_message(thread_id: str, body: SendMessage, request: Request):
-    client_ip = request.client.host if request.client else "unknown"
-    _check_rate_limit(client_ip)
+    _check_rate_limit(_client_ip(request))
 
     conv = _conversations.get(thread_id)
     if conv is None:

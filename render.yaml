@@ -8,6 +8,10 @@ services:
     envVars:
       - key: GROQ_API_KEY
         sync: false
+      # Render's proxy sits in front of the app; rate-limit by the address it
+      # saw, not by the proxy's own address (see server._client_ip).
+      - key: TRUST_PROXY_HEADERS
+        value: "1"
       # ACCESS_PASSWORD, RATE_LIMIT_MAX_MESSAGES, RATE_LIMIT_WINDOW_SECONDS are
       # all optional and deliberately left out of this blueprint so the
       # one-click deploy doesn't prompt for them -- add them later in
