@@ -142,9 +142,11 @@ tool falls back to them automatically and says so in its result.
 the project is in scope; reads/writes outside it are out-of-scope and accumulate like any other
 benign access; shell commands are in scope except direct network clients (`curl`, `wget`, `nc`,
 `scp`, `Invoke-WebRequest`, ...), which count as `network_post` unless your prompt names a URL or
-asks for a download; `WebFetch` is in scope only for domains your prompt names. To enable it for a
-project, copy the `hooks` block from `integrations/claude_code_settings.example.json` into that
-project's `.claude/settings.json`, with the paths pointed at this repo. Settings (environment
+asks for a download; `WebFetch` is in scope only for domains your prompt names. To enable it
+everywhere — recommended, since the identity-level checks need history across projects and days —
+merge the `hooks` block from `integrations/claude_code_settings.example.json` into your user-level
+`~/.claude/settings.json`, with the paths pointed at this repo; for a single project, put it in that
+project's `.claude/settings.local.json` instead. Settings (environment
 variables): `ACTION_MONITOR_ENFORCE=1` to deny instead of only record, `ACTION_MONITOR_IDENTITY`
 (default `claude-code`), and `ACTION_MONITOR_DB` (default: this repo's `state/console.db`, so the
 sessions appear in the local console's History tab). The hook only ever denies, never auto-approves,
