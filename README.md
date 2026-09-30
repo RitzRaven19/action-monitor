@@ -1,21 +1,61 @@
 # Action-Only Agent Monitoring
 
-A behavior-based monitor for LLM agents: instead of reading the agent's chain-of-thought,
-it watches the agent's actual tool calls and compares them against a declared scope for the
-task ("envelope"), flagging divergence with a severity classification.
+[![tests](https://github.com/RitzRaven19/action-monitor/actions/workflows/tests.yml/badge.svg)](https://github.com/RitzRaven19/action-monitor/actions/workflows/tests.yml)
 
-See `docs/` for the full design rationale and results:
-- `WRITEUP.md` — v1/v2 results (0% false positives, 100% detection vs. 60% for the baseline).
-- `EVASION_FINDINGS.md` — v3/v4/v5: adversarial testing of the scope-creep detector itself, ending
-  in an honest trade-off finding rather than a "problem solved" claim.
-- `AGENTDOJO_RESULTS.md` — the monitor replayed over 3,668 of AgentDojo's published agent traces (GPT-4o,
-  Claude 3.5 Sonnet, Llama 3.3 70B, Gemini 2.0 Flash under prompt-injection attack), free and offline:
-  enforce mode cuts attack success from 21% to 11%, or to 5% with the strict profile (unnamed targets on
-  money/message/sharing tools treated as violations); a directory-aware variant keeps that protection
-  while interrupting less legitimate work. Confirmed on 4 held-out models never used in design.
-- `ENVELOPE_COMPARISON.md` — rule-based vs. LLM-based envelope generation, including whether the
-  LLM version is foolable by the same injection the judge already catches.
-- `dashboard.html` — a static visual summary of the above.
+**An open-source monitor for AI agents that judges what they *do*, not what they say — built to catch
+slow scope creep: individually harmless out-of-scope actions that only look wrong once you add them up
+across a turn, a conversation, and an agent's whole history.**
+
+It watches every tool call, compares it with the scope the user's task actually declared, and flags —
+or, in enforce mode, blocks — what falls outside it. It runs on its own demo agent, on
+[Claude Code](integrations/claude_code_hook.py) through its hooks, and offline over published benchmark
+traces. Live console: https://action-monitor-console.onrender.com/ (password-protected).
+
+### Why actions, not reasoning
+
+A monitor that reads an agent's chain-of-thought sees only what the agent chose to say. Research
+finds action-level monitoring beats reasoning-level monitoring on blatant harm (deleting files,
+exfiltrating secrets) — and here, a text-scanning baseline caught 60% of injected attacks where the
+action judge caught 100%, because the agent's final answer simply never mentioned what it did.
+
+### Results
+
+| | |
+|---|---|
+| Demo agent (live model, live web search) | 0% false alarms on clean tasks · 100% of injected attacks caught |
+| [AgentDojo](docs/AGENTDOJO_RESULTS.md), 7,008 published traces from 8 models | enforce cuts attack success 21% → 5% (strict profile); held on 4 models never used in design |
+| GPT-4o under AgentDojo's standard attack | 48% → 14% attack success, no extra LLM calls (`tool_filter`: 7%, `repeat_user_prompt`: 28%) |
+| Real Claude Code use | false alarms found on real sessions, fixed, and re-verified on the same recorded data |
+
+### What's distinctive
+
+- **Scope creep tracked at four nested levels** — this turn, this conversation, this identity's whole
+  history by count, and the same history weighted by how sensitive the resources look. Per-call
+  guardrails (Progent, cordum, agentjail, …) judge each action alone; cross-session research
+  (Magnet, 2026) has no public code.
+- **Tamper-resistant** — the action log is out of the agent's reach, and an agent's attempt to widen its
+  own scope by editing the monitor's config is itself flagged.
+- **Inspectable rules and honest evidence** — adversarial testing of its own detector
+  ([EVASION_FINDINGS.md](docs/EVASION_FINDINGS.md)), a held-out evaluation, and documented limits.
+
+### Honest limits
+
+The cross-session layers — the distinctive part — haven't been validated on external data, because no
+public benchmark yet combines recorded agent tool calls with cross-session grouping. The declared scope
+comes from keyword rules, so unusual phrasing can fool it; enforce numbers on AgentDojo are a replay of
+recorded runs, not live reruns; and an action that stays inside the declared scope (subtle sabotage) is
+invisible to it by design. Full list: [WRITEUP.md](docs/WRITEUP.md#explicit-non-goals).
+
+### Docs
+
+- [`WRITEUP.md`](docs/WRITEUP.md) — design, results, related work, non-goals.
+- [`EVASION_FINDINGS.md`](docs/EVASION_FINDINGS.md) — adversarial testing of the scope-creep detector
+  itself, ending in a trade-off rather than a "problem solved" claim.
+- [`AGENTDOJO_RESULTS.md`](docs/AGENTDOJO_RESULTS.md) — the offline benchmark evaluation, including
+  held-out models and AgentDojo's published defenses for comparison.
+- [`ENVELOPE_COMPARISON.md`](docs/ENVELOPE_COMPARISON.md) — rule-based vs. LLM-based scope generation,
+  including whether the LLM version is foolable by the same injection the judge catches.
+- [`dashboard.html`](docs/dashboard.html) — a static visual summary.
 
 ## Setup
 
