@@ -6,3 +6,4 @@ logs/*.jsonl
 state/*.json
 state/*.db
 .pytest_cache/
+state/agentdojo/

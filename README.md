@@ -8,6 +8,9 @@ See `docs/` for the full design rationale and results:
 - `WRITEUP.md` — v1/v2 results (0% false positives, 100% detection vs. 60% for the baseline).
 - `EVASION_FINDINGS.md` — v3/v4/v5: adversarial testing of the scope-creep detector itself, ending
   in an honest trade-off finding rather than a "problem solved" claim.
+- `AGENTDOJO_RESULTS.md` — the monitor replayed over 3,668 of AgentDojo's published agent traces (GPT-4o,
+  Claude 3.5 Sonnet, Llama 3.3 70B, Gemini 2.0 Flash under prompt-injection attack), free and offline:
+  enforce mode roughly halves attack success; the weak spot is same-tool attacks.
 - `ENVELOPE_COMPARISON.md` — rule-based vs. LLM-based envelope generation, including whether the
   LLM version is foolable by the same injection the judge already catches.
 - `dashboard.html` — a static visual summary of the above.
@@ -48,6 +51,7 @@ copy .env.example .env        # then fill in GROQ_API_KEY (free key: console.gro
   real agent/API (evasion/persistent-tracking demos, the weighted-scoring check, the envelope
   generator comparison).
 - `integrations/` — the Claude Code hook and its coding-agent scope profile.
+- `eval/` — the AgentDojo envelope profile used by `scripts/run_agentdojo_eval.py`.
 - `tests/` — pytest suite (no API key or network needed) covering the logger, envelope generator,
   judge, resource sensitivity, web search backends, the SQLite store, the HTTP layer (routing, auth
   gate, rate limiting, and full streamed turns with only the LLM stubbed), and the "agent cannot
@@ -113,6 +117,13 @@ Full demo (all clean + injected tasks, produces `docs/demo_results.md`):
 
 ```
 python -m demo.run_demo
+```
+
+AgentDojo evaluation (free: replays AgentDojo's published traces, no LLM calls; downloads ~45 MB on
+first run into the git-ignored `state/agentdojo/`):
+
+```
+python -m scripts.run_agentdojo_eval
 ```
 
 Tests (no API key required, mock everything below the LLM):
