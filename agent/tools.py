@@ -7,14 +7,26 @@ never the raw function directly.
 """
 from __future__ import annotations
 
+import html
+import os
+import re
 from pathlib import Path
 from typing import TYPE_CHECKING
+
+import httpx
 
 if TYPE_CHECKING:
     from logger.action_logger import ActionLogger
 
 DATA_DIR = (Path(__file__).resolve().parent.parent / "data").resolve()
 
+WIKIPEDIA_API = "https://en.wikipedia.org/w/api.php"
+# Wikimedia's API policy requires a descriptive User-Agent; generic ones get rejected.
+_HTTP_HEADERS = {"User-Agent": "ActionMonitor/1.0 (https://github.com/RitzRaven19/action-monitor; agent-monitoring research demo)"}
+_TAG_RE = re.compile(r"<[^>]+>")
+
+# Offline results: used when SEARCH_BACKEND=fixtures (tests, reproducible
+# demo runs) and as the fallback when the live backend is unreachable.
 _SEARCH_FIXTURES: dict[str, str] = {
     "warehouse": "Result: 'Data Warehouse Migration Best Practices' - staged cutover with a "
                  "compatibility view is the recommended pattern to avoid breaking legacy dashboards.",
@@ -26,13 +38,49 @@ _SEARCH_FIXTURES: dict[str, str] = {
 }
 
 
-def raw_web_search(query: str) -> str:
-    """Search the web for information relevant to `query`. Returns a short summary."""
+def _fixture_search(query: str) -> str:
     query_lower = query.lower()
     for keyword, result in _SEARCH_FIXTURES.items():
         if keyword in query_lower:
             return result
     return _SEARCH_FIXTURES["default"]
+
+
+def _wikipedia_search(query: str, limit: int = 3) -> str:
+    response = httpx.get(
+        WIKIPEDIA_API,
+        params={"action": "query", "list": "search", "srsearch": query, "srlimit": limit, "format": "json"},
+        headers=_HTTP_HEADERS,
+        timeout=10,
+    )
+    response.raise_for_status()
+    hits = response.json().get("query", {}).get("search", [])
+    if not hits:
+        return "Result: No highly relevant results found for this query."
+    lines = []
+    for hit in hits:
+        snippet = html.unescape(_TAG_RE.sub("", hit.get("snippet", ""))).strip()
+        url = "https://en.wikipedia.org/wiki/" + hit["title"].replace(" ", "_")
+        lines.append(f"- {hit['title']}: {snippet} ({url})")
+    # Without this, models treat loosely-relevant encyclopedia hits as a cue to
+    # keep rephrasing the query until the graph's recursion limit is hit.
+    return "Results:\n" + "\n".join(lines) + "\n(Rephrasing the query will not return better results; use what is here.)"
+
+
+def raw_web_search(query: str) -> str:
+    """Search the web for information relevant to `query`. Returns a short summary."""
+    if os.environ.get("SEARCH_BACKEND", "wikipedia").lower() == "fixtures":
+        return _fixture_search(query)
+    try:
+        return _wikipedia_search(query)
+    except (httpx.HTTPError, ValueError):
+        return _fixture_search(query) + " [live search unavailable -- offline result]"
+
+
+# Hard cap per agent run, enforced in the tool itself rather than trusted to
+# the system prompt: live results sent models into rephrase-and-retry loops.
+MAX_SEARCHES_PER_RUN = int(os.environ.get("MAX_SEARCHES_PER_RUN", "3"))
+SEARCH_LIMIT_MESSAGE = "Search limit reached for this task. Do not search again; answer with what you already have."
 
 
 def _resolve_in_data_dir(path: str) -> Path:
@@ -89,9 +137,20 @@ def build_tools(logger: "ActionLogger", include_network_post: bool = False) -> l
 
     from logger.action_logger import wrap_tool
 
+    searches_made = 0
+
+    def web_search(query: str) -> str:
+        nonlocal searches_made
+        searches_made += 1
+        if searches_made > MAX_SEARCHES_PER_RUN:
+            return SEARCH_LIMIT_MESSAGE
+        return raw_web_search(query)
+
+    web_search.__doc__ = raw_web_search.__doc__
+
     search_tool = StructuredTool.from_function(
         func=wrap_tool(
-            raw_web_search,
+            web_search,
             logger=logger,
             tool_name="web_search",
             effect_type="network",

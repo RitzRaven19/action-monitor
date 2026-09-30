@@ -131,3 +131,29 @@ def test_multiple_runs_in_one_session_ordered_by_turn_index(tmp_path: Path):
     detail = store.get_session_detail("s1")
     turn_indices = [r["turn_index"] for r in detail["runs"]]
     assert turn_indices == [0, 1]
+
+
+def test_stats_aggregates_across_sessions(tmp_path: Path):
+    store = Store(tmp_path / "store.db")
+    assert store.stats()["sessions"] == 0
+
+    store.create_session("s1", "agent_1")
+    store.create_session("s2", "agent_2")
+    store.create_run("r1", "s1", 0, "d", "f")
+    store.create_run("r2", "s2", 0, "d", "f")
+    store.record_action("r1", {"timestamp": 1.0, "tool_name": "read_file", "resource": "a.txt", "effect_type": "read", "outcome": "ok"})
+    store.record_action("r1", {"timestamp": 2.0, "tool_name": "read_file", "resource": "b.txt", "effect_type": "read", "outcome": "ok"})
+    store.record_action("r2", {"timestamp": 3.0, "tool_name": "network_post", "resource": "https://x", "effect_type": "network", "outcome": "ok"})
+    store.record_flag("r1", "action", _flag("in_scope", "none"))
+    store.record_flag("r1", "action", _flag("out_of_scope_benign", "low"))
+    store.record_flag("r2", "action", _flag("out_of_scope_suspicious", "high"))
+    store.record_flag("r2", "session_creep", _flag("session_scope_creep_suspicious", "medium"))
+
+    stats = store.stats()
+    assert stats["sessions"] == 2
+    assert stats["identities"] == 2
+    assert stats["turns"] == 2
+    assert stats["actions"] == 3
+    assert stats["flagged_turns"] == 1  # only r2 has a medium/high flag
+    assert stats["action_severity"] == {"none": 1, "low": 1, "medium": 0, "high": 1}  # action-scope flags only
+    assert stats["tool_usage"] == {"read_file": 2, "network_post": 1}

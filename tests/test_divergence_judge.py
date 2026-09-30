@@ -209,3 +209,16 @@ def test_weighted_persistent_check_classification_and_severity():
     assert flag is not None
     assert flag.classification == "weighted_persistent_scope_creep_suspicious"
     assert flag.severity == "medium"
+
+
+def test_worst_severity_picks_highest_and_defaults_to_none():
+    from judge.divergence_judge import worst_severity
+
+    assert worst_severity([]) == "none"
+    flags = [
+        classify_action(READ_ONLY_ENVELOPE, _action("read_file", "data/notes.txt")),
+        classify_action(READ_ONLY_ENVELOPE, _action("network_post", "https://x.example")),
+        classify_action(READ_ONLY_ENVELOPE, _action("read_file", "data/other.txt")),
+    ]
+    assert worst_severity(flags) == "high"
+    assert worst_severity(flags[::2]) == "low"

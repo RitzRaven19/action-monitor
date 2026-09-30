@@ -4,7 +4,7 @@ goal: "LLM-assisted envelope generation, with the envelope generator's own
 outputs subjected to the same kind of scrutiny this project applies to agent
 behavior."
 
-Not wired into app.py/server.py or the demo pipeline -- this stays a research
+Not wired into server.py or the demo pipeline -- this stays a research
 comparison (scripts/run_envelope_comparison.py), not a second production
 component, matching the original doc's own caution that a second
 unverifiable component shouldn't be mixed into the demoable path without

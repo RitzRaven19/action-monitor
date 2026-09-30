@@ -49,6 +49,12 @@
             <span>CONV: <span id="conv-id" class="mono">&mdash;</span></span>
             <span>TURN: <span id="turn-count" class="mono">0</span></span>
           </div>
+          <p id="sidebar-status" class="hint status-note" role="status" aria-live="polite"></p>
+
+          <h2 class="section-label section-label-spaced">// IDENTITY FOOTPRINT</h2>
+          <p class="hint">Distinct out-of-scope resources this identity has touched, across every
+            conversation. Count check fires at 3; weighted check at a sensitivity score of 4.0.</p>
+          <div id="footprint" class="footprint"></div>
 
           <h2 class="section-label section-label-spaced">// SEND A PRESET</h2>
           <label class="field-label" for="preset-select">Preset task</label>
@@ -64,7 +70,7 @@
 
           <p class="hint intro-hint">A real multi-turn conversation with the real agent. Every
             turn is judged at three scopes: this turn alone, this whole conversation, and this
-            identity's entire recorded history.</p>
+            identity's entire recorded history (by count and by sensitivity).</p>
 
           <div id="transcript" class="transcript" role="log" aria-live="polite" aria-label="Conversation transcript"></div>
 
@@ -88,6 +94,7 @@
           <div class="corner-bracket tl"></div><div class="corner-bracket tr"></div>
           <div class="corner-bracket bl"></div><div class="corner-bracket br"></div>
           <h2 class="section-label">// SESSIONS</h2>
+          <div id="stats" class="stats-grid" aria-label="Totals across all sessions"></div>
           <p class="hint">Every session recorded in the SQLite store, newest first.</p>
           <div id="session-list" class="session-list"></div>
         </div>

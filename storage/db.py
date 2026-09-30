@@ -23,7 +23,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Iterator
 
-from judge.divergence_judge import Flag
+from judge.divergence_judge import SEVERITY_RANK, Flag
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS sessions (
@@ -73,8 +73,7 @@ CREATE TABLE IF NOT EXISTS entity_resources (
 );
 """
 
-_SEVERITY_RANK = {"none": 1, "low": 2, "medium": 3, "high": 4}
-_RANK_TO_SEVERITY = {v: k for k, v in _SEVERITY_RANK.items()}
+_RANK_TO_SEVERITY = {v: k for k, v in SEVERITY_RANK.items()}
 
 
 class Store:
@@ -179,8 +178,8 @@ class Store:
                 SELECT s.session_id, s.entity_id, s.created_at, s.label,
                        COUNT(DISTINCT r.run_id) AS turn_count,
                        COALESCE(MAX(
-                           CASE f.severity WHEN 'high' THEN 4 WHEN 'medium' THEN 3
-                                WHEN 'low' THEN 2 WHEN 'none' THEN 1 ELSE 0 END
+                           CASE f.severity WHEN 'high' THEN 3 WHEN 'medium' THEN 2
+                                WHEN 'low' THEN 1 ELSE 0 END
                        ), 0) AS severity_rank
                 FROM sessions s
                 LEFT JOIN runs r ON r.session_id = s.session_id
@@ -202,6 +201,26 @@ class Store:
             }
             for r in rows
         ]
+
+    def stats(self) -> dict:
+        """Aggregate totals across every recorded session, for the History tab."""
+        with self._connect() as conn:
+            one = lambda sql: conn.execute(sql).fetchone()[0]  # noqa: E731
+            severity_rows = conn.execute(
+                "SELECT severity, COUNT(*) AS n FROM flags WHERE scope = 'action' GROUP BY severity"
+            ).fetchall()
+            tool_rows = conn.execute(
+                "SELECT tool_name, COUNT(*) AS n FROM actions GROUP BY tool_name ORDER BY n DESC"
+            ).fetchall()
+            return {
+                "sessions": one("SELECT COUNT(*) FROM sessions"),
+                "identities": one("SELECT COUNT(DISTINCT entity_id) FROM sessions"),
+                "turns": one("SELECT COUNT(*) FROM runs"),
+                "actions": one("SELECT COUNT(*) FROM actions"),
+                "flagged_turns": one("SELECT COUNT(DISTINCT run_id) FROM flags WHERE severity IN ('medium', 'high')"),
+                "action_severity": {sev: 0 for sev in SEVERITY_RANK} | {r["severity"]: r["n"] for r in severity_rows},
+                "tool_usage": {r["tool_name"]: r["n"] for r in tool_rows},
+            }
 
     def get_session_detail(self, session_id: str) -> dict:
         with self._connect() as conn:

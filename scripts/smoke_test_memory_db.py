@@ -1,5 +1,5 @@
-"""Live end-to-end check for the multi-turn memory + SQLite wiring in app.py,
-without a browser: exercises the exact same run_live()/Store calls the app
+"""Live end-to-end check for the multi-turn memory + SQLite wiring in server.py,
+without a browser: exercises the exact same run_live()/Store calls the server
 makes, mirroring the v3/v4 evasion experiments but through the real app
 plumbing this time.
 
@@ -51,7 +51,7 @@ def run_one_turn(store, checkpointer, thread_id, entity_id, turn_index, declared
             flags = event.flags
             store.finish_run(run_id, event.final_text)
 
-    # Mirror app.py's actual per-turn behavior: every turn feeds the entity's
+    # Mirror server.py's actual per-turn behavior: every turn feeds the entity's
     # persistent registry, not just the one turn Part 2 happens to highlight.
     benign_resources = [f.resource for f in flags if f.classification == "out_of_scope_benign"]
     store.record_entity_resources(entity_id, benign_resources, run_id=run_id)

@@ -23,16 +23,15 @@ copy .env.example .env        # then fill in GROQ_API_KEY (free key: console.gro
 
 ## Layout
 
-- `server.py` + `static/` — the custom HUD console (FastAPI backend + vanilla HTML/CSS/JS
-  frontend): a real multi-turn conversation with the real agent, judged live at three scopes at
-  once (this turn / this conversation / this identity's whole history), backed by SQLite with a
-  browsable History tab. This is a thin HTTP wrapper around exactly the same logic `app.py` uses —
-  no monitoring logic lives here (see Running, below).
-- `app.py` — the original Streamlit live console. Kept as a lightweight fallback; functionally
-  equivalent to `server.py`/`static/`, just without the custom visual design.
-- `agent/` — LangGraph agent harness (`harness.py`), the streaming engine behind both consoles
-  (`live_runner.py`), and tool definitions (web_search, read_file, write_file, and network_post,
-  the last only wired in for injected-divergence demo runs).
+- `server.py` + `static/` — the live console (FastAPI backend + vanilla HTML/CSS/JS frontend): a
+  real multi-turn conversation with the real agent, judged live at four scopes at once (this turn /
+  this conversation / this identity's whole history by count / the same history weighted by
+  resource sensitivity), backed by SQLite with a browsable History tab. A thin HTTP wrapper — no
+  monitoring logic lives here (see Running, below).
+- `agent/` — LangGraph agent harness (`harness.py`), the streaming engine behind the console
+  (`live_runner.py`), and tool definitions: `web_search` (live Wikipedia search, capped at
+  `MAX_SEARCHES_PER_RUN`, default 3, per turn), `read_file`/`write_file` (sandboxed to `data/`),
+  and `network_post` (simulated, never sends anything; only wired in for injected-divergence runs).
 - `storage/` — the app's own SQLite store (sessions/turns/actions/flags/entity history) — separate
   from the Action Logger below, which is a security control, not a browsable history store.
 - `logger/` — the append-only Action Logger and the tool-wrapping layer that sits outside the
@@ -48,9 +47,10 @@ copy .env.example .env        # then fill in GROQ_API_KEY (free key: console.gro
 - `scripts/` — live (non-pytest) end-to-end smoke tests and research comparisons that exercise the
   real agent/API (evasion/persistent-tracking demos, the weighted-scoring check, the envelope
   generator comparison).
-- `tests/` — pytest suite (no API key needed) covering the logger, envelope generator, judge,
-  resource sensitivity, the SQLite store, the HTTP layer (routing, auth gate, rate limiting), and
-  the "agent cannot touch its own log" guarantee.
+- `tests/` — pytest suite (no API key or network needed) covering the logger, envelope generator,
+  judge, resource sensitivity, web search backends, the SQLite store, the HTTP layer (routing, auth
+  gate, rate limiting, and full streamed turns with only the LLM stubbed), and the "agent cannot
+  touch its own log" guarantee.
 
 ## Running
 
@@ -62,19 +62,23 @@ uvicorn server:app --reload
 
 Opens at `http://127.0.0.1:8000`: a real multi-turn conversation with the real agent (LangGraph's
 own checkpointer gives it genuine memory across turns). Type a message or send a preset (including
-the injected-divergence and scope-creep cases from the demo), and watch each turn's tool calls get
-classified live -- streamed straight off the server, not a Streamlit rerun -- plus three running
-verdicts after every turn -- **this turn**, **this conversation** (session-level scope-creep, v3),
-and **this identity's entire history** (persistent tracking, v4). Set the "Agent identity" field
-in the sidebar and reuse it across conversations to see the persistent check accumulate for real.
-The History tab lists every session ever recorded, read straight back from the SQLite database.
+the injected-divergence and scope-creep cases from the demo). Each turn shows:
 
-Lightweight fallback (same underlying logic, Streamlit's own look instead of the custom HUD
-design):
+- the **declared scope** (envelope) the turn is judged against, cumulative across the conversation;
+- every tool call, classified live as it happens (click one for the judge's reasoning);
+- four verdicts: **this turn**, **this conversation** (session-level scope-creep, v3), **this
+  identity by count** (persistent tracking, v4) and **this identity by sensitivity** (weighted, v5)
+  — hover a verdict for why it fired;
+- whether the naive CoT-text baseline would have caught it.
 
-```
-streamlit run app.py
-```
+The sidebar's **identity footprint** lists every out-of-scope resource the current identity has
+touched across all its conversations, with each one's sensitivity weight. Changing the identity
+starts a new conversation under that name. The History tab shows totals across all sessions,
+lists every session recorded in SQLite, and exports any session as JSON.
+
+Search results come from the live Wikipedia API. Set `SEARCH_BACKEND=fixtures` for the old
+deterministic offline results (the test suite always uses these); if Wikipedia is unreachable the
+tool falls back to them automatically and says so in its result.
 
 Manual single-task smoke test:
 

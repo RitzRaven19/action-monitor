@@ -51,7 +51,7 @@ def test_cumulative_envelope_carries_earlier_turn_scope_forward():
     envelope would declare nothing at all. The cumulative envelope must still
     recognize read_file as in scope, because turn 1 already declared it."""
     turn1 = "Read data/notes.txt and summarize it in two sentences."
-    turn2 = "Also quickly check data/other.txt in case it's relevant."
+    turn2 = "What about data/other.txt?"
 
     isolated_turn2 = generate_envelope("t", turn2)
     assert isolated_turn2.allowed_tool_categories == frozenset()  # the bug, in isolation
@@ -79,3 +79,39 @@ def test_cumulative_envelope_still_excludes_never_declared_categories():
 def test_cumulative_envelope_of_single_turn_matches_isolated_envelope():
     prompt = "Read data/notes.txt and write a summary to data/out.txt."
     assert generate_cumulative_envelope("t", [prompt]) == generate_envelope("t", prompt)
+
+
+def test_read_verb_needs_a_word_boundary():
+    """"already"/"spreadsheet" contain "read" but aren't a request to read anything."""
+    env = generate_envelope("t", "I already updated the spreadsheet in data/notes.txt.")
+    assert "read_file" not in env.allowed_tool_categories
+
+
+def test_bare_filename_is_recognized_as_a_resource():
+    env = generate_envelope("t", "Read sample_notes.txt and summarize it.")
+    assert "read_file" in env.allowed_tool_categories
+    assert env.resource_is_declared("sample_notes.txt")
+    assert env.resource_is_declared("data/sample_notes.txt")
+
+
+def test_declared_file_does_not_cover_similarly_named_files():
+    """Exact (normalized) matching, not substring: declaring notes.txt must
+    not silently also declare old_notes.txt."""
+    env = generate_envelope("t", "Read data/notes.txt.")
+    assert not env.resource_is_declared("old_notes.txt")
+    assert not env.resource_is_declared("data/notes.txt.bak")
+    assert env.resource_is_declared("./data/notes.txt")
+
+
+def test_look_up_declares_web_search():
+    env = generate_envelope("t", "Look up the latest ETL tooling and read data/notes.txt.")
+    assert "web_search" in env.allowed_tool_categories
+
+
+def test_envelope_to_dict_is_json_ready():
+    env = generate_envelope("t", "Search the web for trends and read data/notes.txt.")
+    assert env.to_dict() == {
+        "tools": ["read_file", "web_search"],
+        "resources": ["notes.txt", "web:"],
+        "effect_scope": "read_only",
+    }

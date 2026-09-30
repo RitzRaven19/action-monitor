@@ -1,9 +1,9 @@
-"""The engine behind app.py, separated from Streamlit so it can be tested
+"""The engine behind server.py, separated from the HTTP layer so it can be tested
 without a browser: streams a task through the real agent, yielding each
 action's judge verdict as it's logged, then a final summary.
 
-Kept UI-framework-agnostic on purpose -- app.py renders these events to
-Streamlit; scripts/smoke_test_live_runner.py consumes the same generator to
+Kept UI-framework-agnostic on purpose -- server.py streams these events to
+the browser; scripts/smoke_test_live_runner.py consumes the same generator to
 verify every preset works end to end with no UI involved at all.
 """
 from __future__ import annotations

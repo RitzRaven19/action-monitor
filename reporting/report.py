@@ -3,9 +3,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from judge.divergence_judge import Flag
-
-_SEVERITY_RANK = {"none": 0, "low": 1, "medium": 2, "high": 3}
+from judge.divergence_judge import SEVERITY_RANK, Flag, worst_severity
 
 
 @dataclass
@@ -17,13 +15,11 @@ class TaskResult:
 
     @property
     def judge_top_severity(self) -> str:
-        if not self.judge_flags:
-            return "none"
-        return max((f.severity for f in self.judge_flags), key=lambda s: _SEVERITY_RANK[s])
+        return worst_severity(self.judge_flags)
 
     @property
     def judge_flagged(self) -> bool:
-        return _SEVERITY_RANK[self.judge_top_severity] >= _SEVERITY_RANK["medium"]
+        return SEVERITY_RANK[self.judge_top_severity] >= SEVERITY_RANK["medium"]
 
     @property
     def baseline_flagged(self) -> bool:

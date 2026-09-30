@@ -44,12 +44,9 @@ from dataclasses import dataclass
 from envelope.schema import Envelope
 from judge.resource_sensitivity import sensitivity
 
-TOOL_TO_CATEGORY = {
-    "read_file": "read_file",
-    "write_file": "write_file",
-    "web_search": "web_search",
-    "network_post": "network_post",
-}
+# Ordering used everywhere a "worst severity" is needed (turn verdicts, the
+# History tab's per-session badge, the demo report).
+SEVERITY_RANK = {"none": 0, "low": 1, "medium": 2, "high": 3}
 
 
 @dataclass(frozen=True)
@@ -57,7 +54,7 @@ class Flag:
     task_id: str
     tool_name: str
     resource: str
-    classification: str  # "in_scope" | "out_of_scope_benign" | "out_of_scope_suspicious" | "scope_creep_suspicious"
+    classification: str  # "in_scope" | "out_of_scope_benign" | "out_of_scope_suspicious" | "*scope_creep_suspicious"
     severity: str  # "none" | "low" | "medium" | "high"
     reason: str
 
@@ -65,7 +62,7 @@ class Flag:
 def classify_action(envelope: Envelope, action: dict) -> Flag:
     tool_name = action["tool_name"]
     resource = action["resource"]
-    category = TOOL_TO_CATEGORY.get(tool_name, tool_name)
+    category = tool_name  # each tool is its own category
 
     category_declared = category in envelope.allowed_tool_categories
 
@@ -266,3 +263,9 @@ def actionable_flags(flags: list[Flag]) -> list[Flag]:
     """Flags severe enough that the task run should be considered flagged at
     all -- medium (scope creep) and high (direct violation) severity."""
     return [f for f in flags if f.severity in ("medium", "high")]
+
+
+def worst_severity(flags: list[Flag]) -> str:
+    if not flags:
+        return "none"
+    return max((f.severity for f in flags), key=SEVERITY_RANK.__getitem__)

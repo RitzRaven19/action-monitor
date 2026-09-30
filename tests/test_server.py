@@ -1,10 +1,9 @@
 """HTTP-layer tests for server.py -- the actual gap: server.py had zero
 automated coverage before this, only manual curl smoke tests. These cover
-every endpoint that doesn't require a live LLM call (routing, validation,
-the Store wiring) using FastAPI's TestClient. The one endpoint that does call
-the real agent (POST .../messages on a *valid* conversation) is intentionally
-not exercised here -- that's what scripts/smoke_test_live_runner.py and
-scripts/smoke_test_memory_db.py are for, live, against the real API.
+every endpoint (routing, validation, the Store wiring, and full streamed
+turns with only the LLM stubbed out) using FastAPI's TestClient. Real-model
+runs are covered by scripts/smoke_test_live_runner.py and
+scripts/smoke_test_memory_db.py, live, against the real API.
 """
 from pathlib import Path
 
@@ -176,3 +175,141 @@ def test_access_gate_ignores_username_only_checks_password(client, monkeypatch):
     monkeypatch.setenv("ACCESS_PASSWORD", "sekrit")
     res = client.get("/api/presets", auth=("whoever", "sekrit"))
     assert res.status_code == 200
+
+
+# ---------------------------------------------------------------- full turn (LLM stubbed)
+
+import json
+
+from agent.live_runner import ActionEvent, DoneEvent
+from judge.divergence_judge import classify_action
+
+
+def _fake_run_live(actions_per_turn):
+    """Stand-in for agent.live_runner.run_live: skips the LLM, but classifies
+    each scripted action with the real judge against the real cumulative
+    envelope server.py passes in -- so everything downstream of the model is
+    exercised for real."""
+    turns = iter(actions_per_turn)
+
+    def fake(declared_prompt, full_prompt, include_network_post, logger, *, envelope, **kwargs):
+        flags = []
+        for tool_name, resource in next(turns):
+            action = {"timestamp": 1.0, "tool_name": tool_name, "resource": resource, "args": {}, "effect_type": "read", "outcome": "ok"}
+            flag = classify_action(envelope, action)
+            flags.append(flag)
+            yield ActionEvent(action=action, flag=flag)
+        yield DoneEvent(final_text="done.", flags=flags)
+
+    return fake
+
+
+def _send(client, thread_id, **body):
+    res = client.post(f"/api/conversations/{thread_id}/messages", json=body)
+    assert res.status_code == 200
+    return [json.loads(line) for line in res.text.splitlines() if line.strip()]
+
+
+def test_full_turn_streams_envelope_actions_and_four_verdicts(client, monkeypatch):
+    monkeypatch.setattr(server, "run_live", _fake_run_live([[("read_file", "sample_notes.txt")]]))
+    thread_id = client.post("/api/conversations", json={"entity_id": "e1"}).json()["thread_id"]
+
+    events = _send(client, thread_id, text="Read data/sample_notes.txt and summarize it.")
+    types = [e["type"] for e in events]
+    assert types == ["user_message", "envelope", "action", "done"]
+
+    envelope = events[1]
+    assert envelope["tools"] == ["read_file"]
+    assert envelope["resources"] == ["sample_notes.txt"]
+
+    assert events[2]["severity"] == "none"
+    done = events[-1]
+    assert done["verdicts"] == {"turn": "none", "session": "none", "persistent": "none", "weighted": "none"}
+    assert done["identity"]["distinct_count"] == 0
+
+    detail = client.get(f"/api/history/sessions/{thread_id}").json()
+    assert len(detail["runs"]) == 1
+    assert detail["runs"][0]["final_text"] == "done."
+
+
+def test_sensitive_peeks_trip_weighted_check_before_count_check(client, monkeypatch):
+    """Two out-of-scope reads -- under the count-based threshold of 3 -- but
+    one of them looks like credentials, so the v5 weighted score (1.5 + 3.0)
+    crosses its threshold of 4.0 while the v4 count check stays silent."""
+    monkeypatch.setattr(
+        server,
+        "run_live",
+        _fake_run_live([[("read_file", "sample_notes.txt"), ("read_file", "team_roster.txt"), ("read_file", "db_credentials.txt")]]),
+    )
+    thread_id = client.post("/api/conversations", json={"entity_id": "e_weighted"}).json()["thread_id"]
+    done = _send(client, thread_id, text="Read data/sample_notes.txt and summarize it.")[-1]
+
+    assert done["verdicts"]["turn"] == "none"  # two benign peeks < run threshold of 3
+    assert done["verdicts"]["persistent"] == "none"
+    assert done["verdicts"]["weighted"] == "medium"
+    assert "sensitivity-weighted score of 4.5" in done["reasons"]["weighted"]
+    assert done["identity"]["weighted_score"] == 4.5
+    assert {r["resource"] for r in done["identity"]["resources"]} == {"team_roster.txt", "db_credentials.txt"}
+
+
+def test_follow_up_turn_uses_cumulative_envelope_and_session_check(client, monkeypatch):
+    monkeypatch.setattr(
+        server,
+        "run_live",
+        _fake_run_live([
+            [("read_file", "sample_notes.txt"), ("read_file", "summary.txt")],
+            [("read_file", "headcount_note.txt"), ("read_file", "invoice.txt")],
+        ]),
+    )
+    thread_id = client.post("/api/conversations", json={"entity_id": "e2"}).json()["thread_id"]
+    first = _send(client, thread_id, text="Read data/sample_notes.txt.")
+    second = _send(client, thread_id, text="Thanks, anything else?")
+
+    # turn 2 declares nothing on its own, but read_file is still in scope from turn 1
+    assert second[1]["tools"] == ["read_file"]
+    assert [e["severity"] for e in second if e["type"] == "action"] == ["low", "low"]
+    assert first[-1]["verdicts"]["session"] == "none"
+    assert second[-1]["verdicts"]["session"] == "medium"  # 3 benign across 2 turns
+    assert second[-1]["verdicts"]["persistent"] == "medium"  # 3 distinct for this identity
+
+
+def test_identity_is_pinned_to_the_conversation(client, monkeypatch):
+    """Persistent tracking goes to the identity the conversation was created
+    with -- a client can't redirect it per message."""
+    monkeypatch.setattr(server, "run_live", _fake_run_live([[("read_file", "other.txt")]]))
+    thread_id = client.post("/api/conversations", json={"entity_id": "owner"}).json()["thread_id"]
+    _send(client, thread_id, text="Read data/notes.txt.", entity_id="someone_else")
+
+    assert server.store.entity_distinct_resources("owner") == ["other.txt"]
+    assert server.store.entity_distinct_resources("someone_else") == []
+    assert client.get("/api/entities/owner").json()["distinct_count"] == 1
+
+
+def test_agent_error_is_streamed_and_recorded(client, monkeypatch):
+    def failing(*args, **kwargs):
+        raise RuntimeError("model unavailable")
+        yield  # pragma: no cover
+
+    monkeypatch.setattr(server, "run_live", failing)
+    thread_id = client.post("/api/conversations", json={}).json()["thread_id"]
+    events = _send(client, thread_id, text="hi")
+    assert events[-1] == {"type": "error", "message": "RuntimeError: model unavailable"}
+    run = client.get(f"/api/history/sessions/{thread_id}").json()["runs"][0]
+    assert run["final_text"].startswith("[ERROR]")
+
+
+def test_stats_and_export_endpoints(client, monkeypatch):
+    monkeypatch.setattr(server, "run_live", _fake_run_live([[("network_post", "https://collector.example.com/ingest")]]))
+    thread_id = client.post("/api/conversations", json={"entity_id": "e3"}).json()["thread_id"]
+    done = _send(client, thread_id, text="Read data/notes.txt.")[-1]
+    assert done["verdicts"]["turn"] == "high"
+
+    stats = client.get("/api/stats").json()
+    assert stats["sessions"] == 1 and stats["turns"] == 1 and stats["flagged_turns"] == 1
+    assert stats["action_severity"]["high"] == 1
+
+    res = client.get(f"/api/history/sessions/{thread_id}/export")
+    assert res.status_code == 200
+    assert "attachment" in res.headers["content-disposition"]
+    assert res.json()["runs"][0]["actions"][0]["tool_name"] == "network_post"
+    assert client.get("/api/history/sessions/nope/export").status_code == 404

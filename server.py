@@ -1,11 +1,10 @@
-"""HTTP backend for the custom-frontend live console (static/).
+"""HTTP backend for the live console (static/).
 
-A thin wrapper around exactly the same logic app.py (the Streamlit version)
-already orchestrates -- agent.live_runner.run_live, storage.db.Store,
-judge.divergence_judge's four detection layers -- exposed over HTTP so a
-plain HTML/CSS/JS frontend can drive it instead of Streamlit. No monitoring
-logic lives here; this file only wires HTTP requests to the same functions
-app.py calls directly.
+Wires HTTP requests to agent.live_runner.run_live, storage.db.Store, and
+judge.divergence_judge's detection layers. No monitoring logic lives here --
+each turn is judged at four scopes (this turn, this conversation, this
+identity's whole history by count, and the same history weighted by resource
+sensitivity) using the judge's own functions.
 
 Run with:  uvicorn server:app --reload
 Requires GROQ_API_KEY in .env (see .env.example).
@@ -22,8 +21,7 @@ from pathlib import Path
 from typing import Optional
 
 from fastapi import Depends, FastAPI, HTTPException, Request
-from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from fastapi.staticfiles import StaticFiles
 from langgraph.checkpoint.memory import MemorySaver
@@ -37,7 +35,10 @@ from judge.divergence_judge import (
     actionable_flags,
     detect_persistent_scope_creep,
     detect_session_scope_creep,
+    detect_weighted_persistent_scope_creep,
+    worst_severity,
 )
+from judge.resource_sensitivity import sensitivity
 from logger.action_logger import ActionLogger
 from storage.db import Store
 
@@ -45,13 +46,13 @@ LOGS_DIR = Path(__file__).resolve().parent / "logs"
 DB_PATH = Path(__file__).resolve().parent / "state" / "console.db"
 
 app = FastAPI(title="Action Monitor Console API")
-app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
 
 store = Store(DB_PATH)
 
-# In-memory per-conversation state. Lost on server restart -- identical to
-# how st.session_state.checkpointer worked in the Streamlit version.
-_conversations: dict[str, dict] = {}  # thread_id -> {"checkpointer", "turn_index", "turn_flags", "declared_prompts"}
+# In-memory per-conversation state (the agent's LangGraph memory lives in the
+# checkpointer). Lost on server restart; the frontend starts a fresh
+# conversation when it gets a 404 for a thread it no longer recognizes.
+_conversations: dict[str, dict] = {}  # thread_id -> {"checkpointer", "entity_id", "turn_index", "turn_flags", "declared_prompts"}
 
 # ---------------------------------------------------------------- access gate
 # Off by default (local dev, and any deployment that doesn't set the env var
@@ -70,7 +71,7 @@ def require_auth(credentials: Optional[HTTPBasicCredentials] = Depends(_basic_au
 
 
 # ---------------------------------------------------------------- rate limiting
-# A minimal in-memory per-IP token bucket -- no new dependency for something
+# A minimal in-memory per-IP sliding window -- no new dependency for something
 # this small. Applied only to the one endpoint that actually spends Groq
 # quota (sending a message), not the whole API.
 RATE_LIMIT_MAX_MESSAGES = int(os.environ.get("RATE_LIMIT_MAX_MESSAGES", "10"))
@@ -99,17 +100,32 @@ class NewConversation(BaseModel):
 class SendMessage(BaseModel):
     text: Optional[str] = None
     task_id: Optional[str] = None  # if set, look up the preset instead of using `text`
-    entity_id: str = "console_agent"
 
 
 def _ndjson(obj: dict) -> str:
     return json.dumps(obj) + "\n"
 
 
+def _identity_footprint(entity_id: str) -> dict:
+    resources = sorted(store.entity_distinct_resources(entity_id))
+    return {
+        "entity_id": entity_id,
+        "resources": [{"resource": r, "sensitivity": sensitivity(r)} for r in resources],
+        "distinct_count": len(resources),
+        "weighted_score": sum(sensitivity(r) for r in resources),
+    }
+
+
 @app.post("/api/conversations", dependencies=[Depends(require_auth)])
 def create_conversation(body: NewConversation):
     thread_id = str(uuid.uuid4())
-    _conversations[thread_id] = {"checkpointer": MemorySaver(), "turn_index": 0, "turn_flags": [], "declared_prompts": []}
+    _conversations[thread_id] = {
+        "checkpointer": MemorySaver(),
+        "entity_id": body.entity_id,
+        "turn_index": 0,
+        "turn_flags": [],
+        "declared_prompts": [],
+    }
     store.create_session(thread_id, body.entity_id)
     return {"thread_id": thread_id}
 
@@ -122,10 +138,20 @@ def list_presets():
     ]
 
 
+@app.get("/api/entities/{entity_id}", dependencies=[Depends(require_auth)])
+def get_entity(entity_id: str):
+    return _identity_footprint(entity_id)
+
+
 @app.post("/api/entities/{entity_id}/reset", dependencies=[Depends(require_auth)])
 def reset_entity(entity_id: str):
     store.reset_entity(entity_id)
     return {"ok": True}
+
+
+@app.get("/api/stats", dependencies=[Depends(require_auth)])
+def get_stats():
+    return store.stats()
 
 
 @app.get("/api/history/sessions", dependencies=[Depends(require_auth)])
@@ -139,6 +165,14 @@ def get_session(session_id: str):
     if not detail:
         raise HTTPException(status_code=404, detail="session not found")
     return detail
+
+
+@app.get("/api/history/sessions/{session_id}/export", dependencies=[Depends(require_auth)])
+def export_session(session_id: str):
+    return JSONResponse(
+        get_session(session_id),
+        headers={"Content-Disposition": f'attachment; filename="session_{session_id[:8]}.json"'},
+    )
 
 
 @app.post("/api/conversations/{thread_id}/messages", dependencies=[Depends(require_auth)])
@@ -163,6 +197,7 @@ def send_message(thread_id: str, body: SendMessage, request: Request):
 
     def stream():
         turn_index = conv["turn_index"]
+        entity_id = conv["entity_id"]
         run_id = f"{thread_id}_{turn_index}_{uuid.uuid4().hex[:8]}"
         store.create_run(run_id, thread_id, turn_index, declared_prompt, full_prompt)
 
@@ -170,6 +205,7 @@ def send_message(thread_id: str, body: SendMessage, request: Request):
 
         conv["declared_prompts"].append(declared_prompt)
         cumulative_envelope = generate_cumulative_envelope(thread_id, conv["declared_prompts"])
+        yield _ndjson({"type": "envelope", **cumulative_envelope.to_dict()})
 
         flags_this_turn = []
         final_text = ""
@@ -195,6 +231,7 @@ def send_message(thread_id: str, body: SendMessage, request: Request):
                             "type": "action",
                             "tool_name": event.action["tool_name"],
                             "resource": event.action["resource"],
+                            "outcome": event.action["outcome"],
                             "severity": event.flag.severity,
                             "classification": event.flag.classification,
                             "reason": event.flag.reason,
@@ -222,31 +259,34 @@ def send_message(thread_id: str, body: SendMessage, request: Request):
             conv["turn_index"] += 1
             return
 
-        turn_actionable = actionable_flags(flags_this_turn)
-        turn_sev = "high" if any(f.severity == "high" for f in turn_actionable) else ("medium" if turn_actionable else "none")
+        turn_sev = worst_severity(actionable_flags(flags_this_turn))
 
         conv["turn_flags"].append(flags_this_turn)
         session_flag = detect_session_scope_creep(conv["turn_flags"], session_id=thread_id)
         if session_flag:
             store.record_flag(run_id, "session_creep", session_flag)
-        session_sev = session_flag.severity if session_flag else "none"
 
         benign_resources = [f.resource for f in flags_this_turn if f.classification == "out_of_scope_benign"]
-        store.record_entity_resources(body.entity_id, benign_resources, run_id=run_id)
-        cumulative = store.entity_distinct_resources(body.entity_id)
-        persistent_flag = detect_persistent_scope_creep(body.entity_id, cumulative)
+        store.record_entity_resources(entity_id, benign_resources, run_id=run_id)
+        cumulative = store.entity_distinct_resources(entity_id)
+
+        persistent_flag = detect_persistent_scope_creep(entity_id, cumulative)
         if persistent_flag:
             store.record_flag(run_id, "persistent_creep", persistent_flag)
-        persistent_sev = persistent_flag.severity if persistent_flag else "none"
 
-        baseline_hits = scan_text(final_text)
+        weighted_flag = detect_weighted_persistent_scope_creep(entity_id, cumulative)
+        if weighted_flag:
+            store.record_flag(run_id, "weighted_creep", weighted_flag)
 
+        scope_flags = {"session": session_flag, "persistent": persistent_flag, "weighted": weighted_flag}
         yield _ndjson(
             {
                 "type": "done",
                 "final_text": final_text,
-                "verdicts": {"turn": turn_sev, "session": session_sev, "persistent": persistent_sev},
-                "baseline_hits": baseline_hits,
+                "verdicts": {"turn": turn_sev} | {k: f.severity if f else "none" for k, f in scope_flags.items()},
+                "reasons": {k: f.reason if f else None for k, f in scope_flags.items()},
+                "identity": _identity_footprint(entity_id),
+                "baseline_hits": scan_text(final_text),
             }
         )
 

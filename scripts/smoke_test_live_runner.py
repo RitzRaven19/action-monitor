@@ -1,6 +1,6 @@
-"""End-to-end smoke test for agent/live_runner.py (the engine behind app.py).
+"""End-to-end smoke test for agent/live_runner.py (the engine behind server.py).
 
-Runs every preset app.py exposes -- all 10 ALL_TASKS entries, plus two
+Runs every preset the console exposes -- all 10 ALL_TASKS entries, plus two
 representative "custom task" inputs (a normal one and a zero-tool-call edge
 case) -- through the real agent, live. Not a substitute for the pytest suite
 (which is pure/mocked and needs no API key): this hits the real Groq API and
