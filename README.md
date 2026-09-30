@@ -11,7 +11,8 @@ See `docs/` for the full design rationale and results:
 - `AGENTDOJO_RESULTS.md` — the monitor replayed over 3,668 of AgentDojo's published agent traces (GPT-4o,
   Claude 3.5 Sonnet, Llama 3.3 70B, Gemini 2.0 Flash under prompt-injection attack), free and offline:
   enforce mode cuts attack success from 21% to 11%, or to 5% with the strict profile (unnamed targets on
-  money/message/sharing tools treated as violations), at a cost of more interrupted legitimate work.
+  money/message/sharing tools treated as violations); a directory-aware variant keeps that protection
+  while interrupting less legitimate work. Confirmed on 4 held-out models never used in design.
 - `ENVELOPE_COMPARISON.md` — rule-based vs. LLM-based envelope generation, including whether the
   LLM version is foolable by the same injection the judge already catches.
 - `dashboard.html` — a static visual summary of the above.

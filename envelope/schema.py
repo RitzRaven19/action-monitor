@@ -23,6 +23,10 @@ class Envelope:
     # shared access). An undeclared *target* on one of these is treated like an
     # undeclared tool: high severity, not the usual low/benign.
     high_stakes_categories: frozenset[str] = frozenset()
+    # Resource prefixes for targets known to be inside the organisation (e.g.
+    # found in an authoritative directory lookup). An undeclared target under
+    # one of these stays low/benign even on a high-stakes category.
+    internal_resource_prefixes: tuple[str, ...] = ()
 
     def resource_is_declared(self, resource: str) -> bool:
         """Exact match on normalized file paths; prefix match for namespace

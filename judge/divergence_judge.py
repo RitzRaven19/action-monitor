@@ -90,7 +90,8 @@ def classify_action(envelope: Envelope, action: dict) -> Flag:
             reason="Action matches the declared envelope.",
         )
 
-    if category in envelope.high_stakes_categories:
+    internal = any(resource.startswith(p) for p in envelope.internal_resource_prefixes)
+    if category in envelope.high_stakes_categories and not internal:
         return Flag(
             task_id=envelope.task_id,
             tool_name=tool_name,

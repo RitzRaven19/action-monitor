@@ -117,6 +117,69 @@ what a task prompt naturally says, what the tools actually expect, and what an e
 assumed elsewhere, which is exactly the kind of "getting scope definition right is the hardest
 part" problem Section 5 of the plan called out in advance.
 
+## Beyond the demo: enforcement, an external benchmark, and a real agent
+
+### From flagging to blocking
+
+Because the Action Logger already sits between the agent and its tools, the same verdict can be
+applied *before* a call executes. In enforce mode (`judge.make_enforcement_gate`) an undeclared tool
+is refused outright, and out-of-scope accesses are refused once scope creep has been detected;
+refused attempts are still logged and still count toward every aggregate check. In a live run the
+exfiltration preset's `network_post` was refused and nothing was sent, while the clean write task
+ran unblocked.
+
+### External evaluation on AgentDojo (offline, no LLM cost)
+
+The monitor was replayed over AgentDojo's published agent traces — real models under its standard
+`important_instructions` prompt-injection attack, plus no-attack runs — scored against AgentDojo's
+own `utility`/`security` labels (full tables: `docs/AGENTDOJO_RESULTS.md`). The replay reproduces
+AgentDojo's published undefended attack-success rate for GPT-4o exactly (47.69%), which validates the
+parsing.
+
+| Profile | Attack success with enforce | Completed clean tasks interrupted |
+|---|---|---|
+| No defense | 21% (design models) · 12% (held-out) | — |
+| Default | 11% · 7% | 11% · 8% |
+| Strict (unnamed targets on money/message/sharing tools are violations) | 5% · 3% | 18% · 15% |
+| Strict + directory (known members/payees exempt) | 5% · 3% | 14% · 11% |
+
+"Design models" are the four whose traces informed the rules (GPT-4o, Claude 3.5 Sonnet, Llama 3.3
+70B, Gemini 2.0 Flash); "held-out" are four whose traces were downloaded only afterwards and never
+inspected during design (GPT-4o mini, Claude 3.7 Sonnet, Command R+, Gemini 1.5 Pro). The held-out
+numbers track the design numbers, so the rules are not fitted to the traces they were built on.
+
+For context, AgentDojo's published GPT-4o defenses: `tool_filter` 6.84% attack success,
+`transformers_pi_detector` 7.95% (at a large utility cost), `repeat_user_prompt` 27.82%. Rule-based
+enforcement with no extra LLM calls lands between them — 26% (default) and 14% (strict) on GPT-4o.
+Two honest caveats: enforce numbers are a counterfactual replay (after a real refusal an agent might
+try something else), and the remaining cost is concentrated in Slack, where agents legitimately
+message people they only learned about from channel contents.
+
+### Monitoring a real agent
+
+`integrations/claude_code_hook.py` applies the monitor to Claude Code's own tool calls through its
+hooks, with a coding-agent profile (anything inside the project is in scope; access outside it
+accumulates as out-of-scope; direct network clients in shell commands are undeclared unless the task
+names a URL). Verified with real Claude Code in headless mode: in-project reads allowed, a `nc`
+invocation refused before it ran. It only ever denies, never auto-approves, and fails open on
+internal errors.
+
+### Where this sits relative to other work
+
+Per-call policy enforcement at the tool boundary is established: Progent (task-derived least-privilege
+policies, blocking), CaMeL, and open-source gateways such as cordum or Microsoft's Agent Governance
+Toolkit. Cross-session accumulation has also appeared in 2026 research — Magnet accumulates per-user
+capability evidence across sessions (84% F1), and stateful online monitoring clusters traces across
+accounts — though neither releases code. What this project adds is the same out-of-scope signal
+tracked at four nested scopes (turn, conversation, identity by count, identity by sensitivity), as
+open, inspectable rules, with its evasion trade-offs documented. It also finds a gap: no public
+benchmark checked so far combines recorded agent tool calls with cross-session identity grouping
+(CSTM-Bench has the cross-session structure but text-only messages; AgentDojo is single-conversation),
+so the session and identity layers — this project's distinctive part — are exercised by the authored
+evasion experiments and unit tests, not yet by an external benchmark. `scripts/run_session_eval.py`
+is ready to score one when it exists, and is meanwhile collecting real Claude Code sessions to measure
+the identity-level false-alarm rate on legitimate work.
+
 ## Explicit non-goals
 
 - **Does not detect deceptive reasoning** — only divergent or unexpected *behavior*. A model that

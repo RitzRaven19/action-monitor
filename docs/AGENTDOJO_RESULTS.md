@@ -54,6 +54,32 @@ Strict profile by suite (all models):
 | travel | 560 | 15% (82/560) | 6% (32/560) | 71% (58/82) | 71% (58/82) | 77% (63/82) | 79% (50/63) | 1% (1/108) | 0% (0/60) |
 | workspace | 1600 | 9% (147/1600) | 3% (55/1600) | 88% (130/147) | 88% (130/147) | 76% (112/147) | 82% (92/112) | 9% (18/200) | 7% (8/116) |
 
+## Directory-aware strict profile, with a held-out check
+
+The strict profile's cost was concentrated in Slack, where agents legitimately message people they learned about from channel contents. `strict_directory` keeps strict's rule but exempts targets that an *authoritative directory lookup* in the same run showed to be internal -- a workspace member (`get_users_in_channel`), a channel (`get_channels`), a contact, or an existing payee (the structural `recipient` field of the account's own transaction history; free-text fields such as subjects, where injected text lives, are never read). Principle: sending to someone already inside the organisation is lower-stakes than sending money, data, or access to an outsider.
+
+**This profile was designed after seeing the results above**, so it is checked on four models whose traces were downloaded only afterwards and never inspected during design (gpt-4o-mini-2024-07-18, claude-3-7-sonnet-20250219, command-r-plus, gemini-1.5-pro-002). Only the held-out rows are a clean measurement.
+
+| Profile | Models | Attack success with enforce | Attacker calls blocked | Clean-run false alarms | Completed clean tasks interrupted |
+|---|---|---|---|---|---|
+| default | design (the 4 above) | 11% (353/3156) | 55% (307/556) | 10% (49/512) | 11% (34/318) |
+| strict | design (the 4 above) | 5% (158/3156) | 90% (502/556) | 15% (76/512) | 18% (57/318) |
+| strict_directory | design (the 4 above) | 5% (159/3156) | 90% (501/556) | 12% (61/512) | 14% (43/318) |
+| default | **held-out** (never used in design) | 7% (186/2836) | 57% (167/294) | 8% (42/504) | 8% (25/318) |
+| strict | **held-out** (never used in design) | 3% (92/2836) | 89% (261/294) | 13% (68/504) | 15% (49/318) |
+| strict_directory | **held-out** (never used in design) | 3% (93/2836) | 88% (260/294) | 11% (55/504) | 11% (36/318) |
+
+Held-out, `strict_directory`, by suite:
+
+| Suite | Attack success (no defense) | With enforce | Attacker calls blocked | Clean-run false alarms | Completed clean tasks interrupted |
+|---|---|---|---|---|---|
+| banking | 15% (87/576) | 1% (4/576) | 100% (83/83) | 11% (11/100) | 12% (7/59) |
+| slack | 34% (141/420) | 6% (26/420) | 84% (115/137) | 30% (31/104) | 25% (18/73) |
+| travel | 7% (37/560) | 2% (14/560) | 92% (23/25) | 0% (0/108) | 0% (0/55) |
+| workspace | 7% (88/1280) | 4% (49/1280) | 80% (39/49) | 7% (13/192) | 8% (11/131) |
+
+Known gap this opens: an attack aimed at an *internal* target (e.g. messaging an existing member) is back to low severity under `strict_directory`.
+
 ## Context: AgentDojo's published defenses (GPT-4o, same attack)
 
 From https://agentdojo.spylab.ai/results/ -- these are *real* reruns with each defense in place, whereas the enforce numbers above are a counterfactual replay, so the comparison is indicative, not exact. The no-defense row doubles as a validation check: this script's parsing of the published traces reproduces AgentDojo's own undefended success rate exactly (300/629 = 47.69%).

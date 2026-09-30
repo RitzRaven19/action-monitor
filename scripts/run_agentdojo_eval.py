@@ -34,7 +34,7 @@ from collections import defaultdict
 from dataclasses import dataclass
 from pathlib import Path
 
-from eval.agentdojo_profile import SIDE_EFFECT_TOOLS, agentdojo_envelope, map_call
+from eval.agentdojo_profile import PROFILES, SIDE_EFFECT_TOOLS, agentdojo_envelope, directory_entries, map_call
 from judge.divergence_judge import actionable_flags, classify_action, detect_scope_creep, make_enforcement_gate
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -46,6 +46,15 @@ MODELS = [
     "meta-llama_Llama-3.3-70B-Instruct",
     "gemini-2.0-flash-001",
 ]
+# Never used while designing any rule in eval/agentdojo_profile.py -- the
+# strict_directory profile in particular was designed after seeing results on
+# MODELS, so only its numbers on these models count as a clean check.
+HELDOUT_MODELS = [
+    "gpt-4o-mini-2024-07-18",
+    "claude-3-7-sonnet-20250219",
+    "command-r-plus",
+    "gemini-1.5-pro-002",
+]
 ATTACK = "important_instructions"  # AgentDojo's standard, strongest general-purpose attack
 
 
@@ -56,7 +65,7 @@ def download() -> None:
              "https://github.com/ethz-spylab/agentdojo.git", str(DATA_DIR)],
             check=True,
         )
-    patterns = [f"runs/{m}/*/*/{a}/*" for m in MODELS for a in (ATTACK, "none")]
+    patterns = [f"runs/{m}/*/*/{a}/*" for m in MODELS + HELDOUT_MODELS for a in (ATTACK, "none")]
     subprocess.run(["git", "-C", str(DATA_DIR), "sparse-checkout", "set", "--no-cone", *patterns], check=True)
 
 
@@ -92,17 +101,24 @@ class TraceResult:
     legit_blocked: int      # enforce: non-attacker calls that would be refused
 
 
-def evaluate_trace(model: str, suite: str, trace: dict, strict: bool = False) -> TraceResult:
+def evaluate_trace(model: str, suite: str, trace: dict, profile: str = "default") -> TraceResult:
     task_text = next((_text(m.get("content")) for m in trace["messages"] if m["role"] == "user"), "")
     injected = " ".join(_strings(trace.get("injections") or {})).lower()
-    envelope = agentdojo_envelope(trace.get("user_task_id", ""), task_text, strict=strict)
+    directory_aware = profile == "strict_directory"
+    envelope = agentdojo_envelope(
+        trace.get("user_task_id", ""), task_text, strict=profile != "default", directory_aware=directory_aware
+    )
+    directory: set[str] = set()
     gate = make_enforcement_gate(envelope)
 
     flags, attack_calls, attack_blocked, first_attack_seen, legit_blocked = [], 0, False, False, 0
     for message in trace["messages"]:
+        if directory_aware and message.get("role") == "tool":
+            produced_by = (message.get("tool_call") or {}).get("function", "")
+            directory |= directory_entries(produced_by, _text(message.get("content")))
         for call in message.get("tool_calls") or []:
             tool, args = call.get("function", ""), call.get("args") or {}
-            category, resource = map_call(tool, args, task_text)
+            category, resource = map_call(tool, args, task_text, directory if directory_aware else None)
             flags.append(classify_action(envelope, {"tool_name": category, "resource": resource}))
             blocked = gate(category, resource) is not None
 
@@ -132,14 +148,14 @@ def evaluate_trace(model: str, suite: str, trace: dict, strict: bool = False) ->
     )
 
 
-def load_results(strict: bool = False) -> list[TraceResult]:
+def load_results(profile: str = "default", models: list[str] | None = None) -> list[TraceResult]:
     results = []
-    for model in MODELS:
+    for model in models or MODELS:
         for path in sorted((DATA_DIR / "runs" / model).glob("*/*/*/*.json")):
             suite, attack = path.parts[-4], path.parts[-2]
             if attack not in (ATTACK, "none"):
                 continue
-            results.append(evaluate_trace(model, suite, json.loads(path.read_text(encoding="utf-8")), strict=strict))
+            results.append(evaluate_trace(model, suite, json.loads(path.read_text(encoding="utf-8")), profile=profile))
     return results
 
 
@@ -302,13 +318,59 @@ def build_report(results: list[TraceResult], strict_results: list[TraceResult]) 
     return "\n".join(lines) + "\n"
 
 
+def profile_comparison(dev: dict, heldout: dict) -> list[str]:
+    head = "| Profile | Models | Attack success with enforce | Attacker calls blocked | Clean-run false alarms | Completed clean tasks interrupted |"
+    rows = [head, "|---|---|---|---|---|---|"]
+    for label, groups in (("design (the 4 above)", dev), ("**held-out** (never used in design)", heldout)):
+        for profile in PROFILES:
+            sm = summarize(groups[profile])
+            rows.append(f"| {profile} | {label} | {sm['asr_enforced']} | {sm['prevented']} | {sm['false_alarm']} | {sm['false_block']} |")
+    held_suite = defaultdict(list)
+    for r in heldout["strict_directory"]:
+        held_suite[r.suite].append(r)
+    return [
+        "## Directory-aware strict profile, with a held-out check",
+        "",
+        "The strict profile's cost was concentrated in Slack, where agents legitimately message people they "
+        "learned about from channel contents. `strict_directory` keeps strict's rule but exempts targets that an "
+        "*authoritative directory lookup* in the same run showed to be internal -- a workspace member "
+        "(`get_users_in_channel`), a channel (`get_channels`), a contact, or an existing payee (the structural "
+        "`recipient` field of the account's own transaction history; free-text fields such as subjects, where "
+        "injected text lives, are never read). Principle: sending to someone already inside the organisation is "
+        "lower-stakes than sending money, data, or access to an outsider.",
+        "",
+        "**This profile was designed after seeing the results above**, so it is checked on four models whose "
+        f"traces were downloaded only afterwards and never inspected during design ({', '.join(HELDOUT_MODELS)}). "
+        "Only the held-out rows are a clean measurement.",
+        "",
+        *rows,
+        "",
+        "Held-out, `strict_directory`, by suite:",
+        "",
+        "| Suite | Attack success (no defense) | With enforce | Attacker calls blocked | Clean-run false alarms | Completed clean tasks interrupted |",
+        "|---|---|---|---|---|---|",
+        *[
+            f"| {suite} | {sm['asr']} | {sm['asr_enforced']} | {sm['prevented']} | {sm['false_alarm']} | {sm['false_block']} |"
+            for suite, sm in ((k, summarize(v)) for k, v in held_suite.items())
+        ],
+        "",
+        "Known gap this opens: an attack aimed at an *internal* target (e.g. messaging an existing member) is back "
+        "to low severity under `strict_directory`.",
+    ]
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--download", action="store_true", help="sparse-clone the AgentDojo traces first")
     args = parser.parse_args()
     if args.download or not (DATA_DIR / "runs").exists():
         download()
-    report = build_report(load_results(), load_results(strict=True))
+    dev = {p: load_results(p) for p in PROFILES}
+    heldout = {p: load_results(p, HELDOUT_MODELS) for p in PROFILES}
+    report = build_report(dev["default"], dev["strict"])
+    marker = "## Context: AgentDojo's published defenses"
+    comparison = "\n".join(profile_comparison(dev, heldout))
+    report = report.replace(marker, comparison + "\n\n" + marker, 1)
     OUT_PATH.write_text(report, encoding="utf-8")
     print(report)
     print(f"Report written to {OUT_PATH}")
