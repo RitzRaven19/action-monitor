@@ -19,7 +19,6 @@ class Envelope:
     task_id: str
     allowed_tool_categories: frozenset[str]  # e.g. {"read_file", "web_search"}
     allowed_resources: tuple[str, ...]        # file paths, or namespace prefixes ending in ":" (e.g. "web:")
-    effect_scope: str                          # "read_only" | "read_write"
 
     def resource_is_declared(self, resource: str) -> bool:
         """Exact match on normalized file paths; prefix match for namespace
@@ -38,5 +37,4 @@ class Envelope:
         return {
             "tools": sorted(self.allowed_tool_categories),
             "resources": list(self.allowed_resources),
-            "effect_scope": self.effect_scope,
         }

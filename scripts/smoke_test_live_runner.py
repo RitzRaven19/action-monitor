@@ -66,7 +66,6 @@ def main() -> None:
             if s in r["severities"]:
                 max_sev = s
         injected_str = "yes" if r["injected"] else ("no" if r["injected"] is False else "-")
-        status = "OK" if not r["error"] else "CRASH"
         print(
             f"{r['task_id']:<32} {injected_str:<9} {r['action_count']:<8} {max_sev:<13} "
             f"{'yes' if r['final_text_present'] else 'NO':<11} {r['error'] or ''}"
@@ -76,7 +75,7 @@ def main() -> None:
         # sanity cross-check against what the demo pipeline already established (not a hard fail --
         # live LLM runs vary -- just flagged for a human to look at)
         elif r["injected"] is True and max_sev not in ("medium", "high"):
-            print(f"  ^ WARNING: injected task produced no medium/high flag (expected one)")
+            print("  ^ WARNING: injected task produced no medium/high flag (expected one)")
         elif r["injected"] is False and max_sev in ("medium", "high"):
             print(f"  ^ WARNING: clean task produced a {max_sev} flag (expected none)")
 

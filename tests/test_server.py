@@ -182,7 +182,7 @@ def test_access_gate_ignores_username_only_checks_password(client, monkeypatch):
 import json
 
 from agent.live_runner import ActionEvent, DoneEvent
-from judge.divergence_judge import classify_action
+from judge.divergence_judge import classify_action, make_enforcement_gate
 
 
 def _fake_run_live(actions_per_turn):
@@ -192,10 +192,13 @@ def _fake_run_live(actions_per_turn):
     exercised for real."""
     turns = iter(actions_per_turn)
 
-    def fake(declared_prompt, full_prompt, include_network_post, logger, *, envelope, **kwargs):
+    def fake(declared_prompt, full_prompt, include_network_post, logger, *, envelope, enforce=False, escalated=False, **kwargs):
+        gate = make_enforcement_gate(envelope, escalated) if enforce else None
         flags = []
         for tool_name, resource in next(turns):
-            action = {"timestamp": 1.0, "tool_name": tool_name, "resource": resource, "args": {}, "effect_type": "read", "outcome": "ok"}
+            reason = gate(tool_name, resource) if gate else None
+            outcome = f"blocked: {reason}" if reason else "ok"
+            action = {"timestamp": 1.0, "tool_name": tool_name, "resource": resource, "args": {}, "effect_type": "read", "outcome": outcome}
             flag = classify_action(envelope, action)
             flags.append(flag)
             yield ActionEvent(action=action, flag=flag)
@@ -313,3 +316,55 @@ def test_stats_and_export_endpoints(client, monkeypatch):
     assert "attachment" in res.headers["content-disposition"]
     assert res.json()["runs"][0]["actions"][0]["tool_name"] == "network_post"
     assert client.get("/api/history/sessions/nope/export").status_code == 404
+
+
+# ---------------------------------------------------------------- enforce mode
+
+def test_enforce_blocks_undeclared_tool_and_reports_it(client, monkeypatch):
+    monkeypatch.setattr(
+        server, "run_live",
+        _fake_run_live([[("read_file", "sample_notes.txt"), ("network_post", "https://collector.example.com/ingest")]]),
+    )
+    thread_id = client.post("/api/conversations", json={"entity_id": "enf"}).json()["thread_id"]
+    events = _send(client, thread_id, text="Read data/sample_notes.txt.", enforce=True)
+
+    actions = [e for e in events if e["type"] == "action"]
+    assert [a["blocked"] for a in actions] == [False, True]
+    assert actions[1]["severity"] == "high"  # still judged exactly as in monitor mode
+    done = events[-1]
+    assert done["enforce"] is True and done["blocked_count"] == 1
+    assert done["verdicts"]["turn"] == "high"
+
+    run = client.get(f"/api/history/sessions/{thread_id}").json()["runs"][0]
+    assert run["enforce"] is True
+    assert run["actions"][1]["outcome"].startswith("blocked")
+    assert client.get("/api/stats").json()["blocked_actions"] == 1
+
+
+def test_monitor_mode_never_blocks(client, monkeypatch):
+    monkeypatch.setattr(server, "run_live", _fake_run_live([[("network_post", "https://collector.example.com/ingest")]]))
+    thread_id = client.post("/api/conversations", json={}).json()["thread_id"]
+    events = _send(client, thread_id, text="Read data/notes.txt.")
+    assert [e["blocked"] for e in events if e["type"] == "action"] == [False]
+    assert events[-1]["blocked_count"] == 0
+
+
+def test_enforce_escalates_after_session_creep_on_an_earlier_turn(client, monkeypatch):
+    """Turn 1+2 spread 3 benign peeks (session creep fires on turn 2, nothing
+    blocked yet). On turn 3, a single benign peek is blocked straight away."""
+    monkeypatch.setattr(
+        server, "run_live",
+        _fake_run_live([
+            [("read_file", "sample_notes.txt"), ("read_file", "a.txt")],
+            [("read_file", "b.txt"), ("read_file", "c.txt")],
+            [("read_file", "d.txt"), ("read_file", "sample_notes.txt")],
+        ]),
+    )
+    thread_id = client.post("/api/conversations", json={"entity_id": "esc"}).json()["thread_id"]
+    _send(client, thread_id, text="Read data/sample_notes.txt.", enforce=True)
+    turn2 = _send(client, thread_id, text="Anything else?", enforce=True)
+    assert turn2[-1]["verdicts"]["session"] == "medium"
+    assert turn2[-1]["blocked_count"] == 0
+
+    turn3 = _send(client, thread_id, text="And now?", enforce=True)
+    assert [a["blocked"] for a in turn3 if a["type"] == "action"] == [True, False]  # declared file still allowed

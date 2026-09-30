@@ -8,11 +8,6 @@ wiretap the whole project's security guarantee rests on (see
 tests/test_no_agent_control.py) and stays untouched. This store is additive
 -- a browsable "case file" the app writes to *after* the wiretap has already
 recorded what really happened, not a replacement for it.
-
-Also deliberately separate from judge.entity_registry.EntityRegistry (the v4
-CLI demo's own JSON-backed store, left untouched to avoid any regression risk
-to already-passing tests): this module is the app-only equivalent, expanded
-to cover sessions/runs/actions/flags too, not just entity resources.
 """
 from __future__ import annotations
 
@@ -40,7 +35,8 @@ CREATE TABLE IF NOT EXISTS runs (
     declared_prompt TEXT NOT NULL,
     full_prompt TEXT NOT NULL,
     final_text TEXT,
-    created_at REAL NOT NULL
+    created_at REAL NOT NULL,
+    enforce INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE TABLE IF NOT EXISTS actions (
@@ -82,6 +78,10 @@ class Store:
         self._path.parent.mkdir(parents=True, exist_ok=True)
         with self._connect() as conn:
             conn.executescript(SCHEMA)
+            # Databases created before enforce mode existed lack this column.
+            run_columns = {row["name"] for row in conn.execute("PRAGMA table_info(runs)")}
+            if "enforce" not in run_columns:
+                conn.execute("ALTER TABLE runs ADD COLUMN enforce INTEGER NOT NULL DEFAULT 0")
 
     @contextmanager
     def _connect(self) -> Iterator[sqlite3.Connection]:
@@ -105,12 +105,14 @@ class Store:
 
     # --- runs ---
 
-    def create_run(self, run_id: str, session_id: str, turn_index: int, declared_prompt: str, full_prompt: str) -> None:
+    def create_run(
+        self, run_id: str, session_id: str, turn_index: int, declared_prompt: str, full_prompt: str, enforce: bool = False
+    ) -> None:
         with self._connect() as conn:
             conn.execute(
-                "INSERT INTO runs (run_id, session_id, turn_index, declared_prompt, full_prompt, final_text, created_at) "
-                "VALUES (?, ?, ?, ?, ?, NULL, ?)",
-                (run_id, session_id, turn_index, declared_prompt, full_prompt, time.time()),
+                "INSERT INTO runs (run_id, session_id, turn_index, declared_prompt, full_prompt, final_text, created_at, enforce) "
+                "VALUES (?, ?, ?, ?, ?, NULL, ?, ?)",
+                (run_id, session_id, turn_index, declared_prompt, full_prompt, time.time(), int(enforce)),
             )
 
     def finish_run(self, run_id: str, final_text: str) -> None:
@@ -217,6 +219,7 @@ class Store:
                 "identities": one("SELECT COUNT(DISTINCT entity_id) FROM sessions"),
                 "turns": one("SELECT COUNT(*) FROM runs"),
                 "actions": one("SELECT COUNT(*) FROM actions"),
+                "blocked_actions": one("SELECT COUNT(*) FROM actions WHERE outcome LIKE 'blocked%'"),
                 "flagged_turns": one("SELECT COUNT(DISTINCT run_id) FROM flags WHERE severity IN ('medium', 'high')"),
                 "action_severity": {sev: 0 for sev in SEVERITY_RANK} | {r["severity"]: r["n"] for r in severity_rows},
                 "tool_usage": {r["tool_name"]: r["n"] for r in tool_rows},
@@ -247,6 +250,7 @@ class Store:
                         "declared_prompt": run_row["declared_prompt"],
                         "full_prompt": run_row["full_prompt"],
                         "final_text": run_row["final_text"],
+                        "enforce": bool(run_row["enforce"]),
                         "actions": [dict(a) for a in action_rows],
                         "flags": [dict(f) for f in flag_rows],
                     }

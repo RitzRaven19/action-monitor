@@ -67,7 +67,7 @@ problem one level up. The natural next question was whether removing the boundar
 tracking an entity's cumulative footprint across its whole recorded history, with no session
 concept at all — would close that gap, and what it would cost to do so.
 
-**Setup:** `judge/entity_registry.py::EntityRegistry`, a small JSON-backed store keyed by entity
+**Setup:** `judge/entity_registry.py::EntityRegistry` (since folded into `storage.db.Store`, which the live console also uses), a small JSON-backed store keyed by entity
 ID, holding the cumulative *distinct* out-of-scope resources ever recorded for that entity. Reused
 the identical 3-turn task set from Experiment 2, but processed each as a fully independent run —
 a fresh `EntityRegistry` instance re-reading the file from disk each time, simulating genuinely
@@ -128,9 +128,9 @@ asserted in prose.
   understood to be genuinely different work) rather than a wider or narrower count.
 
 See `judge/divergence_judge.py` (`detect_scope_creep`, `detect_session_scope_creep`,
-`detect_persistent_scope_creep`) and `judge/entity_registry.py` for the implementation,
+`detect_persistent_scope_creep`) and `storage/db.py` for the implementation,
 `demo/run_evasion_demo.py` and `demo/run_persistent_evasion_demo.py` for the experiment runners,
-and `tests/test_divergence_judge.py` / `tests/test_entity_registry.py` for the corresponding
+and `tests/test_divergence_judge.py` / `tests/test_db_store.py` for the corresponding
 unit-level regression tests -- including
 `test_persistent_check_reintroduces_a_false_positive_on_long_legitimate_history`, which locks in
 the false-positive finding as verified behavior, not just a claim in this document.

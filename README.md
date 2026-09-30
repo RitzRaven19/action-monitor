@@ -71,6 +71,15 @@ the injected-divergence and scope-creep cases from the demo). Each turn shows:
   — hover a verdict for why it fired;
 - whether the naive CoT-text baseline would have caught it.
 
+**Monitor vs. enforce.** By default the console only watches: every call runs and gets flagged.
+Turn on **ENFORCE** in the sidebar and calls are checked *before* they run: an undeclared tool
+(e.g. `network_post`) is refused outright, and out-of-scope reads are refused once scope creep has
+been detected (this turn hit the run-level threshold, or the conversation or sensitivity-weighted
+identity check fired on an earlier turn). Blocked attempts are still logged and still count toward
+every scope-creep check, since attempting the access is itself the signal. The policy lives in
+`judge.divergence_judge.make_enforcement_gate` and runs inside the tool wrapper, so the agent has no
+handle on it.
+
 The sidebar's **identity footprint** lists every out-of-scope resource the current identity has
 touched across all its conversations, with each one's sensitivity weight. Changing the identity
 starts a new conversation under that name. The History tab shows totals across all sessions,
@@ -129,8 +138,13 @@ them unset deploys exactly as if they didn't exist):
 
 ## What this does and does not solve
 
-See `docs/WRITEUP.md` (generated after the first demo run) for the explicit non-goals: this
-system does not detect deceptive reasoning, is not a CoT-monitoring replacement, does not catch
-multi-step "scope-creep" patterns, and does not use model internals/activations. It is a
-complementary, external, behavior-level monitor for the cases where CoT is short, uninformative,
-or absent.
+It is a complementary, external, behavior-level monitor for the cases where CoT is short,
+uninformative, or absent. It judges (and, in enforce mode, blocks) what the agent *does*, and it
+catches scope creep that only shows up in aggregate -- across a turn, a conversation, or an
+identity's whole history -- within the limits documented in `docs/EVASION_FINDINGS.md` (a fixed
+count threshold can be stayed under; the count-based identity check fires on long legitimate
+histories; the weighted check only sees sensitive resources whose names look sensitive).
+
+Explicit non-goals (see `docs/WRITEUP.md`): it does not detect deceptive reasoning, is not a
+CoT-monitoring replacement, and does not use model internals/activations. The declared scope comes
+from keyword rules over the task text, so unusual phrasing can under- or over-declare it.

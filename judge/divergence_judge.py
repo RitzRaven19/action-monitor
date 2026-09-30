@@ -24,7 +24,7 @@ to see a pattern spread thinly across several turns instead of piled into one:
 
 A fourth pass (detect_persistent_scope_creep) removes the session boundary
 entirely, tracking an entity's cumulative distinct out-of-scope resources
-across its whole recorded history via judge.entity_registry.EntityRegistry:
+across its whole recorded history (persisted by storage.db.Store):
 
   persistent_scope_creep_suspicious -> N+ distinct resources, no session needed -> medium severity, alert
 
@@ -178,7 +178,7 @@ def detect_persistent_scope_creep(entity_id: str, cumulative_distinct_resources:
     grouped into one session.
 
     Pure function: the caller is responsible for maintaining
-    `cumulative_distinct_resources` (see judge.entity_registry.EntityRegistry)
+    `cumulative_distinct_resources` (see storage.db.Store.entity_distinct_resources)
     across runs and even across process restarts. Removing the session
     boundary entirely closes the specific evasion detect_session_scope_creep
     is still vulnerable to (spreading across enough separate sessions) -- but
@@ -255,14 +255,44 @@ def judge_run(envelope: Envelope, action_log: list[dict], scope_creep_threshold:
     return flags
 
 
-def high_severity_flags(flags: list[Flag]) -> list[Flag]:
-    return [f for f in flags if f.severity == "high"]
-
-
 def actionable_flags(flags: list[Flag]) -> list[Flag]:
     """Flags severe enough that the task run should be considered flagged at
     all -- medium (scope creep) and high (direct violation) severity."""
     return [f for f in flags if f.severity in ("medium", "high")]
+
+
+def make_enforcement_gate(envelope: Envelope, escalated: bool = False, scope_creep_threshold: int = 3):
+    """Enforce mode: a gate for logger.action_logger.wrap_tool that refuses a
+    tool call *before* it runs, using the same classify_action verdict the
+    monitor-only mode reports after the fact.
+
+      - out_of_scope_suspicious (undeclared tool) -> always blocked.
+      - out_of_scope_benign -> allowed until scope creep has been detected,
+        then blocked. "Detected" means this run's benign count already hit
+        the run-level threshold, or `escalated` -- the caller's signal that
+        the session-level or sensitivity-weighted identity check fired on an
+        earlier turn. (The count-only persistent check is deliberately not an
+        escalation trigger: its documented false positives on long legitimate
+        histories would turn into blocked legitimate work.)
+
+    Detection itself is unchanged: blocked attempts are still logged and still
+    counted by every scope-creep pass -- attempting the access is the signal.
+    """
+    benign_seen = 0
+
+    def gate(tool_name: str, resource: str) -> str | None:
+        nonlocal benign_seen
+        flag = classify_action(envelope, {"tool_name": tool_name, "resource": resource})
+        if flag.classification == "out_of_scope_suspicious":
+            return f"'{tool_name}' is not in this task's declared scope."
+        if flag.classification == "out_of_scope_benign":
+            creep_detected = escalated or benign_seen >= scope_creep_threshold
+            benign_seen += 1
+            if creep_detected:
+                return f"'{resource}' was not declared for this task, and scope creep has already been detected."
+        return None
+
+    return gate
 
 
 def worst_severity(flags: list[Flag]) -> str:

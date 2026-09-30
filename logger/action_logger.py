@@ -61,9 +61,9 @@ class ActionLogger:
         text = self._log_path.read_text(encoding="utf-8")
         return [json.loads(line) for line in text.splitlines() if line.strip()]
 
-    @property
-    def path(self) -> Path:
-        return self._log_path
+
+# (tool_name, resource) -> a block reason, or None to let the call through.
+Gate = Callable[[str, str], "str | None"]
 
 
 def _normalize_args(func: Callable, args: tuple, kwargs: dict) -> dict:
@@ -84,18 +84,27 @@ def wrap_tool(
     tool_name: str,
     effect_type: str,
     resource_fn: Callable[[dict], str],
+    gate: Gate | None = None,
 ) -> Callable[..., str]:
     """Return a callable that logs every invocation of `func` to `logger`.
 
     This is the ONLY sanctioned way a tool becomes agent-callable in this
-    project (see agent/tools.py::build_tools). `func` itself, `logger`, and
-    the log file path are never handed to the agent.
+    project (see agent/tools.py::build_tools). `func` itself, `logger`, the
+    log file path, and `gate` are never handed to the agent.
+
+    `gate` (enforce mode) is consulted before `func` runs: if it returns a
+    reason, `func` is never called, the attempt is still logged (outcome
+    "blocked: <reason>"), and the agent gets a refusal instead of a result.
     """
 
     @functools.wraps(func)
     def wrapped(*args: Any, **kwargs: Any) -> str:
         normalized = _normalize_args(func, args, kwargs)
         resource = resource_fn(normalized)
+        block_reason = gate(tool_name, resource) if gate is not None else None
+        if block_reason:
+            logger.record(tool_name, normalized, resource, effect_type, f"blocked: {block_reason}")
+            return f"BLOCKED by the action monitor: {block_reason} Do not retry this action; continue without it."
         try:
             result = func(*args, **kwargs)
             logger.record(tool_name, normalized, resource, effect_type, "ok")

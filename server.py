@@ -4,7 +4,8 @@ Wires HTTP requests to agent.live_runner.run_live, storage.db.Store, and
 judge.divergence_judge's detection layers. No monitoring logic lives here --
 each turn is judged at four scopes (this turn, this conversation, this
 identity's whole history by count, and the same history weighted by resource
-sensitivity) using the judge's own functions.
+sensitivity) using the judge's own functions. With `enforce` set on a message,
+out-of-scope tool calls are blocked before they run instead of only flagged.
 
 Run with:  uvicorn server:app --reload
 Requires GROQ_API_KEY in .env (see .env.example).
@@ -52,7 +53,7 @@ store = Store(DB_PATH)
 # In-memory per-conversation state (the agent's LangGraph memory lives in the
 # checkpointer). Lost on server restart; the frontend starts a fresh
 # conversation when it gets a 404 for a thread it no longer recognizes.
-_conversations: dict[str, dict] = {}  # thread_id -> {"checkpointer", "entity_id", "turn_index", "turn_flags", "declared_prompts"}
+_conversations: dict[str, dict] = {}  # thread_id -> {"checkpointer", "entity_id", "turn_index", "turn_flags", "declared_prompts", "creep_detected"}
 
 # ---------------------------------------------------------------- access gate
 # Off by default (local dev, and any deployment that doesn't set the env var
@@ -100,6 +101,7 @@ class NewConversation(BaseModel):
 class SendMessage(BaseModel):
     text: Optional[str] = None
     task_id: Optional[str] = None  # if set, look up the preset instead of using `text`
+    enforce: bool = False  # block out-of-scope tool calls before they run, not just flag them
 
 
 def _ndjson(obj: dict) -> str:
@@ -125,6 +127,7 @@ def create_conversation(body: NewConversation):
         "turn_index": 0,
         "turn_flags": [],
         "declared_prompts": [],
+        "creep_detected": False,  # session or run-level creep fired on an earlier turn
     }
     store.create_session(thread_id, body.entity_id)
     return {"thread_id": thread_id}
@@ -199,7 +202,12 @@ def send_message(thread_id: str, body: SendMessage, request: Request):
         turn_index = conv["turn_index"]
         entity_id = conv["entity_id"]
         run_id = f"{thread_id}_{turn_index}_{uuid.uuid4().hex[:8]}"
-        store.create_run(run_id, thread_id, turn_index, declared_prompt, full_prompt)
+        store.create_run(run_id, thread_id, turn_index, declared_prompt, full_prompt, enforce=body.enforce)
+        # Enforce mode escalates to blocking benign peeks too once scope creep
+        # is already on record for this conversation or (weighted) this identity.
+        escalated = conv["creep_detected"] or (
+            detect_weighted_persistent_scope_creep(entity_id, store.entity_distinct_resources(entity_id)) is not None
+        )
 
         yield _ndjson({"type": "user_message", "text": full_prompt})
 
@@ -208,6 +216,7 @@ def send_message(thread_id: str, body: SendMessage, request: Request):
         yield _ndjson({"type": "envelope", **cumulative_envelope.to_dict()})
 
         flags_this_turn = []
+        blocked_count = 0
         final_text = ""
         error_text = None
 
@@ -222,8 +231,11 @@ def send_message(thread_id: str, body: SendMessage, request: Request):
                 thread_id=thread_id,
                 include_system_prompt=(turn_index == 0),
                 envelope=cumulative_envelope,
+                enforce=body.enforce,
+                escalated=escalated,
             ):
                 if isinstance(event, ActionEvent):
+                    blocked_count += event.blocked
                     store.record_action(run_id, event.action)
                     store.record_flag(run_id, "action", event.flag)
                     yield _ndjson(
@@ -232,6 +244,7 @@ def send_message(thread_id: str, body: SendMessage, request: Request):
                             "tool_name": event.action["tool_name"],
                             "resource": event.action["resource"],
                             "outcome": event.action["outcome"],
+                            "blocked": event.blocked,
                             "severity": event.flag.severity,
                             "classification": event.flag.classification,
                             "reason": event.flag.reason,
@@ -278,6 +291,9 @@ def send_message(thread_id: str, body: SendMessage, request: Request):
         if weighted_flag:
             store.record_flag(run_id, "weighted_creep", weighted_flag)
 
+        if session_flag or any(f.classification == "scope_creep_suspicious" for f in flags_this_turn):
+            conv["creep_detected"] = True
+
         scope_flags = {"session": session_flag, "persistent": persistent_flag, "weighted": weighted_flag}
         yield _ndjson(
             {
@@ -287,6 +303,8 @@ def send_message(thread_id: str, body: SendMessage, request: Request):
                 "reasons": {k: f.reason if f else None for k, f in scope_flags.items()},
                 "identity": _identity_footprint(entity_id),
                 "baseline_hits": scan_text(final_text),
+                "enforce": body.enforce,
+                "blocked_count": blocked_count,
             }
         )
 

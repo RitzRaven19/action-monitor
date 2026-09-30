@@ -56,6 +56,15 @@
             conversation. Count check fires at 3; weighted check at a sensitivity score of 4.0.</p>
           <div id="footprint" class="footprint"></div>
 
+          <h2 class="section-label section-label-spaced">// MODE</h2>
+          <label class="toggle" for="enforce-toggle">
+            <input id="enforce-toggle" type="checkbox">
+            <span class="toggle-track" aria-hidden="true"></span>
+            <span class="toggle-text">ENFORCE &mdash; block, don't just flag</span>
+          </label>
+          <p class="hint">Off: out-of-scope calls run and get flagged. On: undeclared tools are refused
+            before they run, and out-of-scope reads are refused once scope creep is detected.</p>
+
           <h2 class="section-label section-label-spaced">// SEND A PRESET</h2>
           <label class="field-label" for="preset-select">Preset task</label>
           <select id="preset-select" class="text-input"></select>
@@ -69,8 +78,8 @@
           <div class="corner-bracket bl"></div><div class="corner-bracket br"></div>
 
           <p class="hint intro-hint">A real multi-turn conversation with the real agent. Every
-            turn is judged at three scopes: this turn alone, this whole conversation, and this
-            identity's entire recorded history (by count and by sensitivity).</p>
+            turn is judged at four scopes: this turn alone, this whole conversation, and this
+            identity's entire recorded history, by count and by sensitivity.</p>
 
           <div id="transcript" class="transcript" role="log" aria-live="polite" aria-label="Conversation transcript"></div>
 

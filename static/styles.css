@@ -96,8 +96,13 @@ body {
 .layout { display: grid; grid-template-columns: 300px 1fr; gap: 18px; align-items: start; }
 .layout-history { grid-template-columns: 340px 1fr; }
 
+/* Grid items default to min-width:auto and won't shrink below their content,
+   which pushed panels off-screen at phone width. */
+.layout > * { min-width: 0; }
+
 @media (max-width: 860px) {
-  .layout, .layout-history { grid-template-columns: 1fr; }
+  .layout, .layout-history { grid-template-columns: minmax(0, 1fr); }
+  .viewport { padding: 16px; }
 }
 
 /* ---------- chamfered panel (gradient-border trick) ---------- */
@@ -297,6 +302,19 @@ details.action-row[open] summary::after { content: "2"; }
 .outcome-err { color: var(--sev-high); font-size: 10.5px; text-transform: uppercase; }
 .action-error { color: var(--sev-high); }
 .verdict[title] { cursor: help; }
+
+/* ---------- enforce mode ---------- */
+.toggle { display: flex; align-items: center; gap: 10px; cursor: pointer; font-family: var(--font-mono); font-size: 11.5px; color: var(--text); }
+.toggle input { position: absolute; opacity: 0; width: 1px; height: 1px; }
+.toggle-track { position: relative; width: 34px; height: 18px; flex-shrink: 0; border: 1px solid var(--border-dim); background: var(--surface-2); border-radius: 10px; transition: background .15s, border-color .15s; }
+.toggle-track::after { content: ""; position: absolute; top: 2px; left: 2px; width: 12px; height: 12px; border-radius: 50%; background: var(--text-mute); transition: transform .15s, background .15s; }
+.toggle input:checked + .toggle-track { border-color: var(--sev-high); background: rgba(239,68,68,0.15); }
+.toggle input:checked + .toggle-track::after { transform: translateX(16px); background: var(--sev-high); }
+.toggle input:focus-visible + .toggle-track { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
+.action-blocked { border-color: var(--sev-high); background: rgba(239,68,68,0.06); }
+.action-blocked .resource { text-decoration: line-through; }
+.blocked-tag { font-family: var(--font-mono); font-size: 10px; letter-spacing: 0.05em; text-transform: uppercase; color: var(--bg); background: var(--sev-high); padding: 1px 6px; border-radius: 2px; }
+.enforce-note { font-family: var(--font-mono); font-size: 11px; color: var(--sev-high); margin-top: 8px; }
 
 /* ---------- identity footprint ---------- */
 .status-note { min-height: 0; margin: 8px 0 0; color: var(--cyan); }

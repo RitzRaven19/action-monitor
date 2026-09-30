@@ -2,7 +2,7 @@
    Talks to server.py's API; renders the NDJSON stream live as it arrives via
    fetch() + ReadableStream. */
 
-const state = { threadId: null, entityId: "console_agent", turnIndex: 0, busy: false };
+const state = { threadId: null, entityId: "console_agent", turnIndex: 0, busy: false, enforce: false };
 
 const SEV_LABEL = { none: "clean", low: "benign, logged", medium: "scope-creep pattern", high: "suspicious" };
 const VERDICTS = [
@@ -93,6 +93,11 @@ document.getElementById("btn-clear-identity").addEventListener("click", async ()
   setStatus(`Cleared persistent history for "${state.entityId}".`);
 });
 
+document.getElementById("enforce-toggle").addEventListener("change", (e) => {
+  state.enforce = e.target.checked;
+  setStatus(state.enforce ? "Enforce mode on: out-of-scope calls will be blocked." : "Monitor mode: calls are flagged, never blocked.");
+});
+
 // ---------------------------------------------------------------- identity footprint
 function renderFootprint(identity) {
   const el = document.getElementById("footprint");
@@ -174,18 +179,19 @@ function renderEnvelope(env) {
 
 function renderActionRow(event) {
   const row = document.createElement("details");
-  row.className = "action-row";
-  const failed = event.outcome && event.outcome !== "ok";
+  row.className = event.blocked ? "action-row action-blocked" : "action-row";
+  const failed = !event.blocked && event.outcome && event.outcome !== "ok";
   row.innerHTML =
     "<summary>" +
     `<span class="badge sev-${event.severity}"><span class="dot"></span>${event.severity}</span>` +
     `<span class="tool">${escapeHtml(event.tool_name)}</span>` +
     '<span class="arrow">&rarr;</span>' +
     `<span class="resource">${escapeHtml(event.resource)}</span>` +
+    (event.blocked ? '<span class="blocked-tag">blocked</span>' : "") +
     (failed ? '<span class="outcome-err">failed</span>' : "") +
     "</summary>" +
     `<div class="action-reason">${escapeHtml(event.classification)}: ${escapeHtml(event.reason)}` +
-    (failed ? `<br>${escapeHtml(event.outcome)}` : "") +
+    (event.blocked || failed ? `<br>${escapeHtml(event.outcome)}` : "") +
     "</div>";
   return row;
 }
@@ -194,7 +200,7 @@ async function postMessage(payload) {
   return fetch(`/api/conversations/${state.threadId}/messages`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(payload),
+    body: JSON.stringify({ ...payload, enforce: state.enforce }),
   });
 }
 
@@ -263,6 +269,15 @@ async function readStream(res, transcript) {
         );
       }).join("");
 
+      if (event.enforce) {
+        const note = document.createElement("div");
+        note.className = "enforce-note";
+        note.textContent = event.blocked_count
+          ? `Enforce mode: ${event.blocked_count} action(s) blocked before they ran.`
+          : "Enforce mode: nothing needed blocking.";
+        assistantEl.querySelector(".verdict-row").after(note);
+      }
+
       const baselineNote = assistantEl.querySelector(".baseline-note");
       const anyFlagged = Object.values(event.verdicts).some((v) => v !== "none");
       if (event.baseline_hits && event.baseline_hits.length) {
@@ -304,6 +319,7 @@ function renderStats(stats) {
     ["flagged turns", stats.flagged_turns],
     ["actions", stats.actions],
     ["high-sev actions", sev.high],
+    ["blocked", stats.blocked_actions],
   ];
   document.getElementById("stats").innerHTML = cells
     .map(([label, value]) => `<div class="stat"><span class="stat-value">${value}</span><span class="stat-label">${label}</span></div>`)
@@ -366,7 +382,7 @@ async function selectSession(sessionId, list) {
       .map(
         (run) => `
       <div class="turn-block">
-        <h4>TURN ${run.turn_index}</h4>
+        <h4>TURN ${run.turn_index}${run.enforce ? ' <span class="blocked-tag">enforced</span>' : ""}</h4>
         <div class="kv"><span class="k">Prompt:</span> ${escapeHtml(run.full_prompt)}</div>
         <div class="kv"><span class="k">Final answer:</span> ${escapeHtml(run.final_text || "(none)")}</div>
         <div class="kv"><span class="k">Actions (${run.actions.length}):</span></div>

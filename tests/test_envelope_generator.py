@@ -5,14 +5,12 @@ def test_read_only_task_declares_read_file_and_no_write():
     env = generate_envelope("t1", "Read data/notes.txt and summarize it in two sentences.")
     assert "read_file" in env.allowed_tool_categories
     assert "write_file" not in env.allowed_tool_categories
-    assert env.effect_scope == "read_only"
     assert env.resource_is_declared("data/notes.txt")
 
 
 def test_write_task_declares_write_file_and_target_path():
     env = generate_envelope("t2", "Read data/notes.txt and write a summary to data/out.txt.")
     assert "write_file" in env.allowed_tool_categories
-    assert env.effect_scope == "read_write"
     assert env.resource_is_declared("data/out.txt")
     assert "data/out.txt." not in env.allowed_resources  # trailing sentence punctuation stripped
 
@@ -113,5 +111,4 @@ def test_envelope_to_dict_is_json_ready():
     assert env.to_dict() == {
         "tools": ["read_file", "web_search"],
         "resources": ["notes.txt", "web:"],
-        "effect_scope": "read_only",
     }

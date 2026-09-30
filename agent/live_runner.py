@@ -12,9 +12,10 @@ from dataclasses import dataclass, field
 from typing import Iterator, Union
 
 from agent.harness import SYSTEM_PROMPT, build_agent
+from demo.baseline_cot_scanner import message_text
 from envelope.envelope_generator import generate_envelope
 from envelope.schema import Envelope
-from judge.divergence_judge import Flag, classify_action, detect_scope_creep
+from judge.divergence_judge import Flag, classify_action, detect_scope_creep, make_enforcement_gate
 from logger.action_logger import ActionLogger
 
 
@@ -22,6 +23,10 @@ from logger.action_logger import ActionLogger
 class ActionEvent:
     action: dict
     flag: Flag
+
+    @property
+    def blocked(self) -> bool:
+        return self.action["outcome"].startswith("blocked")
 
 
 @dataclass(frozen=True)
@@ -38,14 +43,6 @@ class DoneEvent:
 LiveEvent = Union[ActionEvent, CreepEvent, DoneEvent]
 
 
-def _extract_text(content) -> str:
-    if isinstance(content, str):
-        return content
-    if isinstance(content, list):
-        return " ".join(b.get("text", "") for b in content if isinstance(b, dict))
-    return ""
-
-
 def run_live(
     declared_prompt: str,
     full_prompt: str,
@@ -56,6 +53,8 @@ def run_live(
     thread_id: str | None = None,
     include_system_prompt: bool = True,
     envelope: Envelope | None = None,
+    enforce: bool = False,
+    escalated: bool = False,
 ) -> Iterator[LiveEvent]:
     """Stream a task through the real agent. Yields ActionEvent as each tool
     call lands in the log, then CreepEvent if the scope-creep pass fires, then
@@ -78,10 +77,16 @@ def run_live(
     `thread_id` across calls and set `include_system_prompt=False` after the
     first turn -- LangGraph's own checkpointer merges each new turn's message
     onto that thread's persisted history, so only the new message is sent.
+
+    `enforce=True` blocks tool calls before they run (see
+    judge.divergence_judge.make_enforcement_gate); `escalated` tells that gate
+    scope creep was already detected on an earlier turn. Monitor-only (the
+    default) never blocks anything.
     """
     if envelope is None:
         envelope = generate_envelope("live_run", declared_prompt)
-    compiled = build_agent(logger, include_network_post=include_network_post, checkpointer=checkpointer)
+    gate = make_enforcement_gate(envelope, escalated, scope_creep_threshold) if enforce else None
+    compiled = build_agent(logger, include_network_post=include_network_post, checkpointer=checkpointer, gate=gate)
 
     messages = []
     if include_system_prompt:
@@ -99,7 +104,7 @@ def run_live(
     for step in compiled.stream({"messages": messages}, config=config):
         for node_name, node_output in step.items():
             if node_name == "call_model":
-                text = _extract_text(node_output["messages"][-1].content)
+                text = message_text(node_output["messages"][-1].content)
                 if text.strip():
                     final_text = text
 

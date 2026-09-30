@@ -54,6 +54,7 @@ def build_agent(
     include_network_post: bool = False,
     model_name: str = DEFAULT_MODEL,
     checkpointer=None,
+    gate=None,
 ):
     """Construct and compile the LangGraph agent, wired to `logger` via wrapped tools.
 
@@ -64,6 +65,9 @@ def build_agent(
     merges each turn's new messages onto that thread's persisted state via
     MessagesState's own reducer, so callers only ever need to send the new
     turn's message, not the whole history.
+
+    `gate` (see logger.action_logger.wrap_tool) turns on enforce mode: tool
+    calls it refuses are logged but never executed.
     """
     if not os.environ.get("GROQ_API_KEY"):
         raise RuntimeError(
@@ -71,7 +75,7 @@ def build_agent(
             "Groq key (console.groq.com/keys)."
         )
 
-    tools = build_tools(logger, include_network_post=include_network_post)
+    tools = build_tools(logger, include_network_post=include_network_post, gate=gate)
     llm = ChatGroq(model=model_name, temperature=0)
     llm_with_tools = llm.bind_tools(tools)
 

@@ -46,13 +46,10 @@ def generate_envelope(task_id: str, prompt: str) -> Envelope:
         categories.add("web_search")
         resources.add("web:")
 
-    effect_scope = "read_write" if "write_file" in categories else "read_only"
-
     return Envelope(
         task_id=task_id,
         allowed_tool_categories=frozenset(categories),
         allowed_resources=tuple(sorted(resources)),
-        effect_scope=effect_scope,
     )
 
 
@@ -72,17 +69,13 @@ def generate_cumulative_envelope(task_id: str, declared_prompts: list[str]) -> E
     """
     categories: set[str] = set()
     resources: set[str] = set()
-    effect_scope = "read_only"
     for prompt in declared_prompts:
         env = generate_envelope(task_id, prompt)
         categories |= env.allowed_tool_categories
         resources |= set(env.allowed_resources)
-        if env.effect_scope == "read_write":
-            effect_scope = "read_write"
 
     return Envelope(
         task_id=task_id,
         allowed_tool_categories=frozenset(categories),
         allowed_resources=tuple(sorted(resources)),
-        effect_scope=effect_scope,
     )

@@ -16,7 +16,7 @@ from typing import TYPE_CHECKING
 import httpx
 
 if TYPE_CHECKING:
-    from logger.action_logger import ActionLogger
+    from logger.action_logger import ActionLogger, Gate
 
 DATA_DIR = (Path(__file__).resolve().parent.parent / "data").resolve()
 
@@ -125,13 +125,14 @@ def raw_network_post(url: str, payload: str) -> str:
     return f"Simulated POST to {url} with {len(payload)} bytes of payload (not actually sent)."
 
 
-def build_tools(logger: "ActionLogger", include_network_post: bool = False) -> list:
+def build_tools(logger: "ActionLogger", include_network_post: bool = False, gate: "Gate | None" = None) -> list:
     """Build the LangChain tools bound to the agent.
 
     Every tool exposed here is a *wrapped* callable from logger.action_logger.wrap_tool —
     the agent never gets a handle to the raw_* functions, `logger`, or the log file path.
     `include_network_post` is only ever set True for injected-divergence demo runs (Phase 4);
-    normal/clean task runs never include it.
+    normal/clean task runs never include it. `gate` (enforce mode) is passed to
+    every wrapper, so it can refuse a call before the real tool runs.
     """
     from langchain_core.tools import StructuredTool
 
@@ -152,6 +153,7 @@ def build_tools(logger: "ActionLogger", include_network_post: bool = False) -> l
         func=wrap_tool(
             web_search,
             logger=logger,
+            gate=gate,
             tool_name="web_search",
             effect_type="network",
             resource_fn=lambda a: f"web:{a.get('query', '')}",
@@ -163,6 +165,7 @@ def build_tools(logger: "ActionLogger", include_network_post: bool = False) -> l
         func=wrap_tool(
             raw_read_file,
             logger=logger,
+            gate=gate,
             tool_name="read_file",
             effect_type="read",
             resource_fn=lambda a: a.get("path", ""),
@@ -174,6 +177,7 @@ def build_tools(logger: "ActionLogger", include_network_post: bool = False) -> l
         func=wrap_tool(
             raw_write_file,
             logger=logger,
+            gate=gate,
             tool_name="write_file",
             effect_type="write",
             resource_fn=lambda a: a.get("path", ""),
@@ -189,6 +193,7 @@ def build_tools(logger: "ActionLogger", include_network_post: bool = False) -> l
             func=wrap_tool(
                 raw_network_post,
                 logger=logger,
+            gate=gate,
                 tool_name="network_post",
                 effect_type="network",
                 resource_fn=lambda a: a.get("url", ""),

@@ -23,6 +23,15 @@ CONCERNING_KEYWORDS = [
 ]
 
 
+def message_text(content) -> str:
+    """Visible text of a LangChain message's content (a string, or a list of content blocks)."""
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        return " ".join(b.get("text", "") for b in content if isinstance(b, dict))
+    return ""
+
+
 def scan_text(text: str) -> list[str]:
     """Return which concerning keywords appear in `text` (case-insensitive)."""
     text_lower = text.lower()
@@ -37,9 +46,5 @@ def scan_messages(messages: list) -> list[str]:
         role = getattr(msg, "type", "")
         if role != "ai":
             continue
-        content = msg.content
-        text = content if isinstance(content, str) else " ".join(
-            block.get("text", "") for block in content if isinstance(block, dict)
-        )
-        found.update(scan_text(text))
+        found.update(scan_text(message_text(msg.content)))
     return sorted(found)

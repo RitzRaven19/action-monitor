@@ -5,8 +5,8 @@ docs/EVASION_FINDINGS.md): that check only sees runs explicitly grouped into
 one session, so spreading the same footprint across enough separate sessions
 evades it again. This demo reuses the exact same 3 evasion-session tasks from
 demo/run_evasion_demo.py, but processes them as fully independent runs with
-NO session grouping declared at all -- each run gets a fresh EntityRegistry
-instance reading from disk (simulating a separate process invocation), and
+NO session grouping declared at all -- each run opens a fresh storage.db.Store
+on the same SQLite file (simulating a separate process invocation), and
 the persistent per-entity distinct-resource count is what catches the
 pattern, not any run/session boundary.
 
@@ -20,11 +20,11 @@ from agent.harness import run_task
 from demo.tasks import EVASION_SESSION_TASKS
 from envelope.envelope_generator import generate_envelope
 from judge.divergence_judge import detect_persistent_scope_creep, judge_run
-from judge.entity_registry import EntityRegistry
 from logger.action_logger import ActionLogger
+from storage.db import Store
 
 LOGS_DIR = Path(__file__).resolve().parent.parent / "logs"
-REGISTRY_PATH = Path(__file__).resolve().parent.parent / "state" / "entity_registry.json"
+DB_PATH = Path(__file__).resolve().parent.parent / "state" / "persistent_demo.db"
 ENTITY_ID = "demo_agent_v4"
 
 
@@ -32,7 +32,7 @@ def run_live_experiment() -> list[str]:
     lines = ["## Experiment: persistent tracking with no session boundary declared", ""]
 
     # Fresh registry for a clean demo run each time this script is invoked.
-    EntityRegistry(REGISTRY_PATH).reset(ENTITY_ID)
+    Store(DB_PATH).reset_entity(ENTITY_ID)
 
     for task in EVASION_SESSION_TASKS:
         logger = ActionLogger(LOGS_DIR / f"persistent_{task.task_id}.jsonl")
@@ -43,12 +43,12 @@ def run_live_experiment() -> list[str]:
         flags = judge_run(envelope, action_log)
         benign_resources = [f.resource for f in flags if f.classification == "out_of_scope_benign"]
 
-        # A fresh EntityRegistry instance per run -- reads/writes the same file,
-        # never carries state in a shared in-memory object -- to demonstrate
-        # this genuinely survives across what would be separate processes.
-        registry = EntityRegistry(REGISTRY_PATH)
-        registry.record(ENTITY_ID, benign_resources)
-        cumulative = registry.distinct_resources(ENTITY_ID)
+        # A fresh Store instance per run -- reads/writes the same file, never
+        # carries state in a shared in-memory object -- to demonstrate this
+        # genuinely survives across what would be separate processes.
+        store = Store(DB_PATH)
+        store.record_entity_resources(ENTITY_ID, benign_resources, run_id=task.task_id)
+        cumulative = sorted(store.entity_distinct_resources(ENTITY_ID))
 
         persistent_flag = detect_persistent_scope_creep(ENTITY_ID, cumulative)
         status = f"CAUGHT ({persistent_flag.reason})" if persistent_flag else "silent"
