@@ -102,7 +102,7 @@ def test_send_message_with_unknown_task_id_returns_400(client):
 def test_static_index_is_served(client):
     res = client.get("/")
     assert res.status_code == 200
-    assert b"Action Monitor Console" in res.content
+    assert b"<title>Action Monitor</title>" in res.content
 
 
 def test_list_sessions_empty_when_nothing_recorded(client):
@@ -215,6 +215,8 @@ def _fake_run_live(actions_per_turn):
 
     def fake(declared_prompt, full_prompt, include_network_post, logger, *, envelope, enforce=False, escalated=False, **kwargs):
         gate = make_enforcement_gate(envelope, escalated) if enforce else None
+        if kwargs.get("on_usage"):
+            kwargs["on_usage"](1200)  # as if Groq reported 1,200 tokens for this turn
         flags = []
         for tool_name, resource in next(turns):
             reason = gate(tool_name, resource) if gate else None
@@ -389,3 +391,32 @@ def test_enforce_escalates_after_session_creep_on_an_earlier_turn(client, monkey
 
     turn3 = _send(client, thread_id, text="And now?", enforce=True)
     assert [a["blocked"] for a in turn3 if a["type"] == "action"] == [True, False]  # declared file still allowed
+
+
+# ---------------------------------------------------------------- token limits
+
+def test_turn_tokens_are_counted_and_reported(client, monkeypatch):
+    monkeypatch.setattr(server, "run_live", _fake_run_live([[("read_file", "notes.txt")]]))
+    thread_id = client.post("/api/conversations", json={}).json()["thread_id"]
+    done = _send(client, thread_id, text="Read data/notes.txt.")[-1]
+    assert done["tokens"] == 1200
+    assert done["usage"]["tokens_used"] == 1200
+    assert client.get("/api/usage").json()["tokens_used"] == 1200
+
+
+def test_daily_token_budget_blocks_new_messages(client, monkeypatch):
+    monkeypatch.setattr(server, "DAILY_TOKEN_BUDGET", 1000)
+    server.store.add_tokens(server._today(), 1000)
+    thread_id = client.post("/api/conversations", json={}).json()["thread_id"]
+    res = client.post(f"/api/conversations/{thread_id}/messages", json={"text": "hi"})
+    assert res.status_code == 429
+    assert "token budget" in res.json()["detail"]
+    assert client.get("/api/usage").json()["remaining"] == 0
+
+
+def test_zero_budget_means_unlimited(client, monkeypatch):
+    monkeypatch.setattr(server, "DAILY_TOKEN_BUDGET", 0)
+    monkeypatch.setattr(server, "run_live", _fake_run_live([[("read_file", "notes.txt")]]))
+    server.store.add_tokens(server._today(), 10**9)
+    thread_id = client.post("/api/conversations", json={}).json()["thread_id"]
+    assert _send(client, thread_id, text="Read data/notes.txt.")[-1]["type"] == "done"

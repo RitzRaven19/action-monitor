@@ -55,19 +55,15 @@ def build_agent(
     model_name: str = DEFAULT_MODEL,
     checkpointer=None,
     gate=None,
+    max_tokens: int | None = None,
+    on_usage=None,
 ):
-    """Construct and compile the LangGraph agent, wired to `logger` via wrapped tools.
+    """Build the agent graph. Tools are always the logged wrappers.
 
-    `checkpointer` (e.g. langgraph.checkpoint.memory.MemorySaver) is optional and
-    defaults to None, which is the current behavior everywhere: no persistence,
-    every call independent. Passing a checkpointer plus a `thread_id` in the
-    invoke/stream config gives the agent real multi-turn memory -- LangGraph
-    merges each turn's new messages onto that thread's persisted state via
-    MessagesState's own reducer, so callers only ever need to send the new
-    turn's message, not the whole history.
-
-    `gate` (see logger.action_logger.wrap_tool) turns on enforce mode: tool
-    calls it refuses are logged but never executed.
+    checkpointer + a thread_id in the config gives multi-turn memory.
+    gate turns on enforce mode (refused calls are logged, never run).
+    max_tokens caps each reply; note gpt-oss spends reasoning tokens from the same allowance.
+    on_usage(total_tokens) is called after every model call with Groq's own count.
     """
     if not os.environ.get("GROQ_API_KEY"):
         raise RuntimeError(
@@ -76,11 +72,14 @@ def build_agent(
         )
 
     tools = build_tools(logger, include_network_post=include_network_post, gate=gate)
-    llm = ChatGroq(model=model_name, temperature=0)
+    llm = ChatGroq(model=model_name, temperature=0, max_tokens=max_tokens)
     llm_with_tools = llm.bind_tools(tools)
 
     def call_model(state: MessagesState) -> dict[str, Any]:
         response = _invoke_with_retry(llm_with_tools, state["messages"])
+        usage = getattr(response, "usage_metadata", None) or {}
+        if on_usage and usage.get("total_tokens"):
+            on_usage(int(usage["total_tokens"]))
         return {"messages": [response]}
 
     graph = StateGraph(MessagesState)

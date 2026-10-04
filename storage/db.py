@@ -67,6 +67,11 @@ CREATE TABLE IF NOT EXISTS entity_resources (
     first_seen_run_id TEXT,
     PRIMARY KEY (entity_id, resource)
 );
+
+CREATE TABLE IF NOT EXISTS token_usage (
+    day TEXT PRIMARY KEY,  -- UTC date, YYYY-MM-DD
+    tokens INTEGER NOT NULL DEFAULT 0
+);
 """
 
 _RANK_TO_SEVERITY = {v: k for k, v in SEVERITY_RANK.items()}
@@ -181,6 +186,21 @@ class Store:
                 (session_id, scope),
             ).fetchone()
         return row is not None
+
+    # --- token usage (daily budget) ---
+
+    def add_tokens(self, day: str, tokens: int) -> None:
+        with self._connect() as conn:
+            conn.execute(
+                "INSERT INTO token_usage (day, tokens) VALUES (?, ?) "
+                "ON CONFLICT(day) DO UPDATE SET tokens = tokens + excluded.tokens",
+                (day, tokens),
+            )
+
+    def tokens_used(self, day: str) -> int:
+        with self._connect() as conn:
+            row = conn.execute("SELECT tokens FROM token_usage WHERE day = ?", (day,)).fetchone()
+        return row["tokens"] if row else 0
 
     # --- entity resources (persistent tracking) ---
 

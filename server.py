@@ -79,6 +79,33 @@ RATE_LIMIT_MAX_MESSAGES = int(os.environ.get("RATE_LIMIT_MAX_MESSAGES", "10"))
 RATE_LIMIT_WINDOW_SECONDS = int(os.environ.get("RATE_LIMIT_WINDOW_SECONDS", "600"))
 _message_timestamps: dict[str, list[float]] = defaultdict(list)
 
+# Token limits, so one long chat can't use up the Groq free tier.
+# 0 turns the daily budget off.
+DAILY_TOKEN_BUDGET = int(os.environ.get("DAILY_TOKEN_BUDGET", "150000"))
+MAX_TOKENS_PER_REPLY = int(os.environ.get("MAX_TOKENS_PER_REPLY", "2048"))
+
+
+def _today() -> str:
+    return time.strftime("%Y-%m-%d", time.gmtime())
+
+
+def _usage() -> dict:
+    used = store.tokens_used(_today())
+    return {
+        "day": _today(),
+        "tokens_used": used,
+        "daily_budget": DAILY_TOKEN_BUDGET,
+        "remaining": max(DAILY_TOKEN_BUDGET - used, 0) if DAILY_TOKEN_BUDGET else None,
+    }
+
+
+def _check_token_budget() -> None:
+    if DAILY_TOKEN_BUDGET and store.tokens_used(_today()) >= DAILY_TOKEN_BUDGET:
+        raise HTTPException(
+            status_code=429,
+            detail=f"Today's token budget ({DAILY_TOKEN_BUDGET:,}) is used up. It resets at 00:00 UTC.",
+        )
+
 
 def _client_ip(request: Request) -> str:
     """Who to rate-limit. Behind a reverse proxy (Render), request.client is
@@ -166,6 +193,11 @@ def reset_entity(entity_id: str):
     return {"ok": True}
 
 
+@app.get("/api/usage", dependencies=[Depends(require_auth)])
+def get_usage():
+    return _usage()
+
+
 @app.get("/api/stats", dependencies=[Depends(require_auth)])
 def get_stats():
     return store.stats()
@@ -195,6 +227,7 @@ def export_session(session_id: str):
 @app.post("/api/conversations/{thread_id}/messages", dependencies=[Depends(require_auth)])
 def send_message(thread_id: str, body: SendMessage, request: Request):
     _check_rate_limit(_client_ip(request))
+    _check_token_budget()
 
     conv = _conversations.get(thread_id)
     if conv is None:
@@ -229,6 +262,12 @@ def send_message(thread_id: str, body: SendMessage, request: Request):
         yield _ndjson({"type": "envelope", **cumulative_envelope.to_dict()})
 
         flags_this_turn = []
+        turn_tokens = 0
+
+        def count_tokens(n: int) -> None:
+            nonlocal turn_tokens
+            turn_tokens += n
+            store.add_tokens(_today(), n)
         blocked_count = 0
         final_text = ""
         error_text = None
@@ -246,6 +285,8 @@ def send_message(thread_id: str, body: SendMessage, request: Request):
                 envelope=cumulative_envelope,
                 enforce=body.enforce,
                 escalated=escalated,
+                max_tokens=MAX_TOKENS_PER_REPLY or None,
+                on_usage=count_tokens,
             ):
                 if isinstance(event, ActionEvent):
                     blocked_count += event.blocked
@@ -316,6 +357,8 @@ def send_message(thread_id: str, body: SendMessage, request: Request):
                 "reasons": {k: f.reason if f else None for k, f in scope_flags.items()},
                 "identity": _identity_footprint(entity_id),
                 "baseline_hits": scan_text(final_text),
+                "tokens": turn_tokens,
+                "usage": _usage(),
                 "enforce": body.enforce,
                 "blocked_count": blocked_count,
             }

@@ -1,15 +1,13 @@
-/* Action Monitor Console -- frontend logic.
-   Talks to server.py's API; renders the NDJSON stream live as it arrives via
-   fetch() + ReadableStream. */
+// Frontend for server.py. Turns are streamed back as NDJSON and rendered as they arrive.
 
 const state = { threadId: null, entityId: "console_agent", turnIndex: 0, busy: false, enforce: false };
 
 const SEV_LABEL = { none: "clean", low: "benign, logged", medium: "scope-creep pattern", high: "suspicious" };
 const VERDICTS = [
-  ["turn", "this turn"],
-  ["session", "this conversation"],
-  ["persistent", "this identity (count)"],
-  ["weighted", "this identity (sensitivity)"],
+  ["turn", "This turn"],
+  ["session", "Conversation"],
+  ["persistent", "History (count)"],
+  ["weighted", "History (sensitivity)"],
 ];
 
 function escapeHtml(s) {
@@ -78,37 +76,58 @@ document.getElementById("entity-id").addEventListener("change", async (e) => {
   state.entityId = next;
   await newConversation();
   await loadFootprint();
-  setStatus(`Switched identity to "${next}" — new conversation started.`);
+  setStatus(`Now using "${next}". Started a new conversation.`);
 });
 
 document.getElementById("btn-new-conversation").addEventListener("click", async () => {
   await newConversation();
-  setStatus("New conversation started.");
+  setStatus("Started a new chat.");
 });
 
 document.getElementById("btn-clear-identity").addEventListener("click", async () => {
   if (!confirm(`Clear the persistent history for "${state.entityId}"? Past sessions in History are kept.`)) return;
   await getJson(`/api/entities/${encodeURIComponent(state.entityId)}/reset`, { method: "POST" });
   await loadFootprint();
-  setStatus(`Cleared persistent history for "${state.entityId}".`);
+  setStatus(`Cleared the history for "${state.entityId}".`);
 });
 
 document.getElementById("enforce-toggle").addEventListener("change", (e) => {
   state.enforce = e.target.checked;
-  setStatus(state.enforce ? "Enforce mode on: out-of-scope calls will be blocked." : "Monitor mode: calls are flagged, never blocked.");
+  setStatus(state.enforce ? "Blocking is on." : "Blocking is off. Calls get flagged but still run.");
 });
 
 // ---------------------------------------------------------------- identity footprint
+function renderUsage(u) {
+  const el = document.getElementById("usage");
+  if (!u.daily_budget) {
+    el.textContent = `${u.tokens_used.toLocaleString()} tokens (no daily limit)`;
+    return;
+  }
+  const pct = Math.min(100, (100 * u.tokens_used) / u.daily_budget);
+  const cls = pct >= 100 ? "full" : pct >= 80 ? "near" : "";
+  el.innerHTML =
+    `<div class="usage-bar"><div class="usage-fill ${cls}" style="width:${pct.toFixed(1)}%"></div></div>` +
+    `${u.tokens_used.toLocaleString()} of ${u.daily_budget.toLocaleString()} tokens. Resets at midnight UTC.`;
+}
+
+async function loadUsage() {
+  try {
+    renderUsage(await getJson("/api/usage"));
+  } catch (err) {
+    document.getElementById("usage").textContent = "Couldn't load usage.";
+  }
+}
+
 function renderFootprint(identity) {
   const el = document.getElementById("footprint");
   const rows = identity.resources.length
     ? identity.resources
         .map((r) => `<li><span class="resource">${escapeHtml(r.resource)}</span><span class="weight">${r.sensitivity.toFixed(1)}</span></li>`)
         .join("")
-    : '<li class="empty">nothing yet</li>';
+    : '<li class="empty">Nothing yet</li>';
   el.innerHTML =
-    `<div class="footprint-totals"><span>DISTINCT: <b>${identity.distinct_count}</b>/3</span>` +
-    `<span>WEIGHTED: <b>${identity.weighted_score.toFixed(1)}</b>/4.0</span></div>` +
+    `<div class="footprint-totals"><span>Distinct: <b>${identity.distinct_count}</b> / 3</span>` +
+    `<span>Weighted: <b>${identity.weighted_score.toFixed(1)}</b> / 4</span></div>` +
     `<ul class="footprint-list">${rows}</ul>`;
 }
 
@@ -125,7 +144,7 @@ async function loadPresets() {
   const presets = await getJson("/api/presets");
   const select = document.getElementById("preset-select");
   select.innerHTML = presets
-    .map((p) => `<option value="${escapeHtml(p.task_id)}" title="${escapeHtml(p.prompt)}">${p.injected ? "⚠️" : "✅"} ${escapeHtml(p.task_id)}</option>`)
+    .map((p) => `<option value="${escapeHtml(p.task_id)}" title="${escapeHtml(p.prompt)}">${escapeHtml(p.task_id)}${p.injected ? " (attack)" : ""}</option>`)
     .join("");
 }
 
@@ -164,7 +183,7 @@ function renderAssistantShell() {
   el.innerHTML =
     '<div class="msg-role">assistant</div>' +
     '<div class="envelope-strip"></div>' +
-    '<div class="msg-bubble">Agent is working...</div>' +
+    '<div class="msg-bubble">Working on it…</div>' +
     '<div class="action-feed"></div>' +
     '<div class="verdict-row"></div>' +
     '<div class="baseline-note"></div>';
@@ -174,7 +193,7 @@ function renderAssistantShell() {
 function renderEnvelope(env) {
   const tools = env.tools.length ? env.tools.map((t) => `<span class="chip">${escapeHtml(t)}</span>`).join("") : '<span class="chip chip-empty">no tools</span>';
   const resources = env.resources.map((r) => `<span class="chip chip-res">${escapeHtml(r)}</span>`).join("");
-  return `<span class="env-label">DECLARED SCOPE</span>${tools}${resources}`;
+  return `<span class="env-label">Allowed:</span>${tools}${resources}`;
 }
 
 function renderActionRow(event) {
@@ -213,7 +232,7 @@ async function sendTurn(payload) {
     if (!state.threadId) await newConversation();
     let res = await postMessage(payload);
     if (res.status === 404) {
-      // Server restarted and forgot this conversation -- start over transparently.
+      // Server restarted and lost the conversation, so start a new one.
       await newConversation();
       setStatus("The server no longer had that conversation, so a new one was started.");
       res = await postMessage(payload);
@@ -248,7 +267,7 @@ async function readStream(res, transcript) {
     } else if (event.type === "run_creep") {
       const row = document.createElement("div");
       row.className = "action-row";
-      row.innerHTML = `${badgeHtml(event.severity, "scope-creep pass")} ${escapeHtml(event.reason)}`;
+      row.innerHTML = `${badgeHtml(event.severity, "scope creep")} ${escapeHtml(event.reason)}`;
       actionFeedEl.appendChild(row);
     } else if (event.type === "error") {
       assistantEl.querySelector(".msg-bubble").textContent = "This turn failed.";
@@ -259,7 +278,7 @@ async function readStream(res, transcript) {
       state.turnIndex++;
       document.getElementById("turn-count").textContent = state.turnIndex;
     } else if (event.type === "done") {
-      assistantEl.querySelector(".msg-bubble").textContent = event.final_text || "(no visible text response)";
+      assistantEl.querySelector(".msg-bubble").textContent = event.final_text || "(no text reply)";
 
       assistantEl.querySelector(".verdict-row").innerHTML = VERDICTS.map(([key, label]) => {
         const reason = event.reasons && event.reasons[key];
@@ -273,20 +292,27 @@ async function readStream(res, transcript) {
         const note = document.createElement("div");
         note.className = "enforce-note";
         note.textContent = event.blocked_count
-          ? `Enforce mode: ${event.blocked_count} action(s) blocked before they ran.`
-          : "Enforce mode: nothing needed blocking.";
+          ? `Blocked ${event.blocked_count} call${event.blocked_count === 1 ? "" : "s"} before they ran.`
+          : "Blocking was on; nothing needed blocking.";
         assistantEl.querySelector(".verdict-row").after(note);
       }
 
       const baselineNote = assistantEl.querySelector(".baseline-note");
       const anyFlagged = Object.values(event.verdicts).some((v) => v !== "none");
       if (event.baseline_hits && event.baseline_hits.length) {
-        baselineNote.textContent = `Baseline would have caught: ${event.baseline_hits.join(", ")}`;
+        baselineNote.textContent = `A text-only check would have caught: ${event.baseline_hits.join(", ")}`;
       } else if (anyFlagged) {
-        baselineNote.textContent = "Baseline would have seen nothing -- the visible text never mentioned it.";
+        baselineNote.textContent = "A text-only check would have missed this. The reply never mentions it.";
       }
 
       if (event.identity) renderFootprint(event.identity);
+      if (event.usage) renderUsage(event.usage);
+      if (event.tokens) {
+        const note = document.createElement("div");
+        note.className = "token-note";
+        note.textContent = `${event.tokens.toLocaleString()} tokens`;
+        assistantEl.appendChild(note);
+      }
       state.turnIndex++;
       document.getElementById("turn-count").textContent = state.turnIndex;
     }
@@ -318,7 +344,7 @@ function renderStats(stats) {
     ["turns", stats.turns],
     ["flagged turns", stats.flagged_turns],
     ["actions", stats.actions],
-    ["high-sev actions", sev.high],
+    ["high severity", sev.high],
     ["blocked", stats.blocked_actions],
   ];
   document.getElementById("stats").innerHTML = cells
@@ -374,15 +400,15 @@ async function selectSession(sessionId, list) {
   const exportUrl = `/api/history/sessions/${encodeURIComponent(sessionId)}/export`;
   container.innerHTML =
     '<div class="detail-head">' +
-    `<h3 class="section-label">IDENTITY: <span class="mono">${escapeHtml(detail.entity_id)}</span> &middot; ${detail.runs.length} turn(s)</h3>` +
-    `<a class="hud-btn" href="${exportUrl}" download>EXPORT JSON</a>` +
+    `<h3>${escapeHtml(detail.entity_id)} <span class="hint">· ${detail.runs.length} turn${detail.runs.length === 1 ? "" : "s"}</span></h3>` +
+    `<a class="btn" href="${exportUrl}" download>Download JSON</a>` +
     "</div>" +
     (detail.runs.length ? "" : '<p class="hint">No turns were sent in this session.</p>') +
     detail.runs
       .map(
         (run) => `
       <div class="turn-block">
-        <h4>TURN ${run.turn_index}${run.enforce ? ' <span class="blocked-tag">enforced</span>' : ""}</h4>
+        <h4>Turn ${run.turn_index + 1}${run.enforce ? ' <span class="blocked-tag">blocking on</span>' : ""}</h4>
         <div class="kv"><span class="k">Prompt:</span> ${escapeHtml(run.full_prompt)}</div>
         <div class="kv"><span class="k">Final answer:</span> ${escapeHtml(run.final_text || "(none)")}</div>
         <div class="kv"><span class="k">Actions (${run.actions.length}):</span></div>
@@ -397,7 +423,7 @@ async function selectSession(sessionId, list) {
 // ---------------------------------------------------------------- init
 (async () => {
   try {
-    await Promise.all([loadPresets(), newConversation(), loadFootprint()]);
+    await Promise.all([loadPresets(), newConversation(), loadFootprint(), loadUsage()]);
   } catch (err) {
     setStatus(`Could not reach the server: ${err.message}`);
   }

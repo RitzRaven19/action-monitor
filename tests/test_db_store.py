@@ -157,3 +157,13 @@ def test_stats_aggregates_across_sessions(tmp_path: Path):
     assert stats["flagged_turns"] == 1  # only r2 has a medium/high flag
     assert stats["action_severity"] == {"none": 1, "low": 1, "medium": 0, "high": 1}  # action-scope flags only
     assert stats["tool_usage"] == {"read_file": 2, "network_post": 1}
+
+
+def test_token_usage_accumulates_per_day(tmp_path: Path):
+    store = Store(tmp_path / "store.db")
+    assert store.tokens_used("2026-10-05") == 0
+    store.add_tokens("2026-10-05", 500)
+    store.add_tokens("2026-10-05", 250)
+    store.add_tokens("2026-10-06", 10)
+    assert store.tokens_used("2026-10-05") == 750
+    assert store.tokens_used("2026-10-06") == 10

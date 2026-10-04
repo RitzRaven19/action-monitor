@@ -55,6 +55,8 @@ def run_live(
     envelope: Envelope | None = None,
     enforce: bool = False,
     escalated: bool = False,
+    max_tokens: int | None = None,
+    on_usage=None,
 ) -> Iterator[LiveEvent]:
     """Stream a task through the real agent. Yields ActionEvent as each tool
     call lands in the log, then CreepEvent if the scope-creep pass fires, then
@@ -86,7 +88,10 @@ def run_live(
     if envelope is None:
         envelope = generate_envelope("live_run", declared_prompt)
     gate = make_enforcement_gate(envelope, escalated, scope_creep_threshold) if enforce else None
-    compiled = build_agent(logger, include_network_post=include_network_post, checkpointer=checkpointer, gate=gate)
+    compiled = build_agent(
+        logger, include_network_post=include_network_post, checkpointer=checkpointer, gate=gate,
+        max_tokens=max_tokens, on_usage=on_usage,
+    )
 
     messages = []
     if include_system_prompt:
