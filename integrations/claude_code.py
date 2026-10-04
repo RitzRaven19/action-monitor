@@ -25,7 +25,8 @@ from urllib.parse import parse_qsl, unquote, urlparse
 
 from envelope.schema import Envelope
 
-_URL_RE = re.compile(r"https?://[^\s'\"<>)]+")
+# Stops at shell separators: real usage had "B=https://host; curl $B/x" parse as host "host;".
+_URL_RE = re.compile(r"https?://[^\s'\"<>);|&`,]+")
 # Network clients in *command position* (start of a command, or after ; | && (
 # ` $( or a newline, optionally behind sudo/env/an assignment). Real usage
 # showed a looser "any whitespace before it" rule firing on text that merely
@@ -103,6 +104,7 @@ def _domain(url: str) -> str:
 
 
 CONFIG_RELPATH = ".claude/action-monitor.json"
+LOOPBACK_HOSTS = frozenset({"localhost", "127.0.0.1", "::1", "0.0.0.0"})
 
 # Shell commands that *write* the config (merely mentioning it -- a commit
 # message, a grep, a query -- is not tampering; real usage flagged exactly
@@ -179,9 +181,13 @@ BOOKKEEPING_TOOLS = frozenset({
     "TodoWrite", "Task", "Agent", "AskUserQuestion", "ToolSearch", "Skill", "EnterPlanMode",
     "ExitPlanMode", "ListAgents", "SendMessage", "TaskStop", "ScheduleWakeup", "Monitor",
 })
-_SIDE_EFFECT_NAME_RE = re.compile(
-    r"(send|share|post|publish|delete|trash|remove|create|update|write|upload|execute|apply|deploy|"
-    r"merge|invite|pay|transfer|respond|reply|forward)",
+# An outside tool counts as a read only when its name *starts* with a clearly
+# read-only verb; anything else is treated as an action. Safe default: real
+# usage showed the opposite rule (action only if a known action word appears)
+# letting Supabase's restore_project through as a read.
+_READ_ONLY_NAME_RE = re.compile(
+    r"^(?:get|list|search|read|fetch|describe|show|find|count|check|view|lookup|query_docs|download|"
+    r"suggest|explain|preview|summari[sz]e)(?:_|$)",
     re.IGNORECASE,
 )
 _GENERIC_TOKENS = {"mcp", "claude", "ai", "api", "server", "tool", "tools"}
@@ -211,7 +217,7 @@ def external_tool_call(tool_name: str, tool_input: dict | None = None) -> tuple[
         category = "external_read" if arg in _OUTBOUND_BY_ACTION_ARG[tool_name] else "external_action"
         action = f"{action}.{arg}"
     else:
-        category = "external_action" if _SIDE_EFFECT_NAME_RE.search(action) else "external_read"
+        category = "external_read" if _READ_ONLY_NAME_RE.match(action) else "external_action"
     return category, f"tool:{_service_token(tool_name)}:{action.lower()}"
 
 
@@ -225,7 +231,9 @@ def coding_envelope(session_id: str, declared_prompts: list[str], hosts: list[st
     when some other host is declared."""
     text = "\n".join(declared_prompts)
     categories = set(ALWAYS_DECLARED) | {"external_read", "external_action"}
-    named = {_domain(u) for u in _URL_RE.findall(text)} | {h.lower() for h in hosts}
+    # Loopback is always in scope: a call to your own machine can't send data
+    # anywhere else (real usage: checks of a local dev server were flagged).
+    named = {_domain(u) for u in _URL_RE.findall(text)} | {h.lower() for h in hosts} | LOOPBACK_HOSTS
     if named or _DOWNLOAD_WORDS_RE.search(text):
         categories.add("network_post")
     # Every word of the prompt declares that service for external tools
