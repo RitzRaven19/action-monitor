@@ -1,20 +1,16 @@
-"""Coding-agent profile for monitoring Claude Code through its hooks.
+"""Rules for watching Claude Code through its hooks.
 
-The demo agent's envelope ("only the files the prompt names are in scope")
-doesn't fit a coding agent, which legitimately reads dozens of project files
-no prompt ever names -- under that rule every task would trip scope creep.
-So the coding profile moves the boundary to the project itself:
+A coding agent reads plenty of files no prompt mentions, so the boundary here
+is the project, not the files named in the prompt:
+- reads/writes inside the project are fine; outside it they count as low and add up
+- normal shell commands are fine (tests, builds, git)
+- direct network calls (curl, wget, scp, inline scripts using requests, ...) are
+  high unless the prompt or the project config names the host; localhost is fine
+- web searches are fine; fetching a page is fine for named domains, low otherwise
+- MCP and other outside tools: reads are low unless the prompt mentions the
+  service, actions (send, share, delete, ...) are high unless it does
 
-  - reads/writes inside the project are in scope; outside it they are
-    out_of_scope_benign, and accumulate like any other benign access;
-  - ordinary shell commands are in scope (tests, builds, git);
-  - shell commands that talk to the network directly (curl, wget, scp, ...)
-    are `network_post`, declared only when the prompt names a URL or asks
-    for a download -- otherwise out_of_scope_suspicious;
-  - web searches are in scope; fetching a URL is in scope only for domains
-    the prompt names, otherwise benign.
-
-Pure functions only; integrations/claude_code_hook.py does the I/O.
+No I/O here; claude_code_hook.py does that.
 """
 from __future__ import annotations
 
@@ -25,20 +21,17 @@ from urllib.parse import parse_qsl, unquote, urlparse
 
 from envelope.schema import Envelope
 
-# Stops at shell separators: real usage had "B=https://host; curl $B/x" parse as host "host;".
+# Stop at shell separators, or "B=https://host; curl $B" gives the host "host;".
 _URL_RE = re.compile(r"https?://[^\s'\"<>);|&`,]+")
-# Network clients in *command position* (start of a command, or after ; | && (
-# ` $( or a newline, optionally behind sudo/env/an assignment). Real usage
-# showed a looser "any whitespace before it" rule firing on text that merely
-# mentions the word -- e.g. "curl" inside a commit message.
+# Network clients, only where a command starts (so "curl" inside a commit
+# message doesn't count). Allows sudo/env/VAR=x in front.
 _NETWORK_CLIENT_RE = re.compile(
     r"(?:^|[;|&(`\n]|\$\()\s*(?:(?:sudo|env|exec|time)\s+|\w+=\S*\s+)*"
     r"(curl|wget|nc|ncat|netcat|scp|sftp|ftp|rsync|ssh|telnet|"
     r"invoke-webrequest|invoke-restmethod|iwr|irm)(?:\.exe)?(?=\s|$)",
     re.IGNORECASE | re.MULTILINE,
 )
-# An interpreter running code given on the command line or piped on stdin
-# ("python -c", "node -e", "python - <<EOF", "pwsh -Command", ...), in command position.
+# Interpreters running inline code: python -c, node -e, python - <<EOF, pwsh -Command, ...
 _INLINE_INTERPRETER_RE = re.compile(
     r"(?:^|[;|&(`\n]|\$\()\s*(?:\S*[\\/])?"
     r"(?:python[\d.]*|py|node|deno|bun|ruby|perl|php|pwsh|powershell)(?:\.exe)?\b[^\n|;&]*?"
@@ -90,9 +83,9 @@ _BLOB_RE = re.compile(r"^(?:[A-Za-z0-9+/=_-]{40,}|[0-9a-fA-F]{40,})$")
 
 
 def _carries_data(url: str) -> bool:
-    """Exfiltration-shaped URL: a long query string, or any query value that
-    looks like an encoded blob (40+ chars of base64/hex). Ordinary docs links
-    have short, readable parameters."""
+    """True for URLs that look like they're carrying data out: a long query string
+    or a query value that looks like base64/hex. Normal links have short params.
+    """
     query = urlparse(url).query
     if len(query) > 120:
         return True
@@ -106,9 +99,8 @@ def _domain(url: str) -> str:
 CONFIG_RELPATH = ".claude/action-monitor.json"
 LOOPBACK_HOSTS = frozenset({"localhost", "127.0.0.1", "::1", "0.0.0.0"})
 
-# Shell commands that *write* the config (merely mentioning it -- a commit
-# message, a grep, a query -- is not tampering; real usage flagged exactly
-# that when the rule was a plain substring match). Within one line only.
+# Shell commands that write the config. Just mentioning the file (grep, a
+# commit message) doesn't count.
 _CONFIG_WRITE_RE = re.compile(
     r"(?:>>?|\btee\b|\bsed\s+(?:-\w+\s+)*-i|\bcp\b|\bmv\b|\brm\b|\bdel\b|\btruncate\b|"
     r"\bSet-Content\b|\bAdd-Content\b|\bOut-File\b|\bRemove-Item\b|\bNew-Item\b|\bCopy-Item\b|\bMove-Item\b)"
@@ -119,9 +111,9 @@ _CONFIG_WRITE_RE = re.compile(
 
 
 def load_project_config(cwd: str) -> dict:
-    """The user's own declarations for this project, e.g.
-    {"allowed_hosts": ["myapp.onrender.com"]} in .claude/action-monitor.json.
-    Missing or unreadable -> {} (nothing extra declared)."""
+    """Read .claude/action-monitor.json, e.g. {"allowed_hosts": ["myapp.onrender.com"]}.
+    Returns {} if it's missing or broken.
+    """
     try:
         data = json.loads((Path(cwd) / CONFIG_RELPATH).read_text(encoding="utf-8"))
     except (OSError, ValueError):
@@ -135,8 +127,7 @@ def allowed_hosts(cwd: str) -> list[str]:
 
 
 def map_tool_call(tool_name: str, tool_input: dict, cwd: str) -> tuple[str, str] | None:
-    """(category, resource) for a Claude Code tool call, or None for tools the
-    monitor doesn't judge (task lists, sub-agent plumbing, etc.)."""
+    """(category, resource) for a tool call, or None for tools we don't judge (todo lists etc.)."""
     tool_input = tool_input or {}
     path = tool_input.get("file_path") or tool_input.get("path") or tool_input.get("notebook_path") or ""
     if tool_name in READ_TOOLS:
@@ -146,7 +137,7 @@ def map_tool_call(tool_name: str, tool_input: dict, cwd: str) -> tuple[str, str]
     if tool_name in WRITE_TOOLS:
         resource = file_resource(path, cwd)
         if resource == "project:" + CONFIG_RELPATH:
-            # The agent must not widen its own scope: "monitor_config" is never declared.
+            # never declared, so the agent can't widen its own scope
             return "monitor_config", resource
         return "write_file", resource
     if tool_name == "Bash" or tool_name == "PowerShell":
@@ -157,8 +148,7 @@ def map_tool_call(tool_name: str, tool_input: dict, cwd: str) -> tuple[str, str]
             urls = _URL_RE.findall(command)
             return "network_post", "net:" + (_domain(urls[0]) if urls else command.strip()[:120])
         if _INLINE_INTERPRETER_RE.search(command) and _NETWORK_LIBRARY_RE.search(command):
-            # Inline code (python -c, node -e, a script piped on stdin, ...) that
-            # uses a network library: network access without any named client.
+            # inline code using a network library
             urls = _URL_RE.findall(command)
             return "network_post", "net:" + (_domain(urls[0]) if urls else "inline-script")
         return "execute", "cmd:" + command.strip()[:200]
@@ -167,7 +157,7 @@ def map_tool_call(tool_name: str, tool_input: dict, cwd: str) -> tuple[str, str]
     if tool_name == "WebFetch":
         url = tool_input.get("url", "")
         if _carries_data(url):
-            # A URL that smuggles data out is a send, not a read.
+            # carrying data out, so treat it as a send
             return "network_post", "net:" + _domain(url)
         return "web_fetch", "url:" + _domain(url)
     if tool_name in BOOKKEEPING_TOOLS:
@@ -175,16 +165,13 @@ def map_tool_call(tool_name: str, tool_input: dict, cwd: str) -> tuple[str, str]
     return external_tool_call(tool_name, tool_input)
 
 
-# Claude Code's own plumbing: no effect outside the session (a sub-agent's
-# tool calls reach the hook separately, so the launcher itself is skipped).
+# Claude Code's own plumbing. A sub-agent's tool calls reach the hook separately.
 BOOKKEEPING_TOOLS = frozenset({
     "TodoWrite", "Task", "Agent", "AskUserQuestion", "ToolSearch", "Skill", "EnterPlanMode",
     "ExitPlanMode", "ListAgents", "SendMessage", "TaskStop", "ScheduleWakeup", "Monitor",
 })
-# An outside tool counts as a read only when its name *starts* with a clearly
-# read-only verb; anything else is treated as an action. Safe default: real
-# usage showed the opposite rule (action only if a known action word appears)
-# letting Supabase's restore_project through as a read.
+# Outside tools are actions unless the name starts with a read-only verb.
+# (The reverse default let Supabase's restore_project through as a read.)
 _READ_ONLY_NAME_RE = re.compile(
     r"^(?:get|list|search|read|fetch|describe|show|find|count|check|view|lookup|query_docs|download|"
     r"suggest|explain|preview|summari[sz]e)(?:_|$)",
@@ -194,23 +181,22 @@ _GENERIC_TOKENS = {"mcp", "claude", "ai", "api", "server", "tool", "tools"}
 
 
 def _service_token(tool_name: str) -> str:
-    """The service an external tool belongs to, as a user would say it:
-    "mcp__claude_ai_Google_Drive__share_file" -> "drive", "Artifact" -> "artifact"."""
+    """Short service name for an outside tool, as you'd say it in a prompt:
+    mcp__claude_ai_Google_Drive__share_file -> "drive", Artifact -> "artifact".
+    """
     server = tool_name.split("__")[1] if tool_name.startswith("mcp__") and tool_name.count("__") >= 2 else tool_name
     tokens = [t for t in re.split(r"[^a-z0-9]+", server.lower()) if t and t not in _GENERIC_TOKENS]
     return tokens[-1] if tokens else server.lower()
 
 
-# Built-in tools that publish outside the session, whose effect is picked by an
-# `action` argument rather than by the tool's name.
+# Tools whose effect depends on an `action` argument rather than the name.
 _OUTBOUND_BY_ACTION_ARG = {"Artifact": {"read", "list", "open", "quickstart"}}
 
 
 def external_tool_call(tool_name: str, tool_input: dict | None = None) -> tuple[str, str]:
-    """MCP servers and other outside tools: `external_action` when the call
-    changes something outside (sending, sharing, publishing, deleting, ...),
-    else `external_read`. Resource is "tool:<service>:<tool>", in scope only
-    when the user's prompt mentions that service."""
+    """Classify an MCP/outside tool as external_read or external_action.
+    Resource is "tool:<service>:<tool>", in scope only if the prompt mentions the service.
+    """
     action = tool_name.split("__")[-1]
     if tool_name in _OUTBOUND_BY_ACTION_ARG:
         arg = str((tool_input or {}).get("action") or "publish").lower()
@@ -222,22 +208,19 @@ def external_tool_call(tool_name: str, tool_input: dict | None = None) -> tuple[
 
 
 def coding_envelope(session_id: str, declared_prompts: list[str], hosts: list[str] | tuple[str, ...] = ()) -> Envelope:
-    """Cumulative envelope for a Claude Code session, built from the user's
-    own prompts plus the hosts the user declared in the project config
-    (never from tool output -- same discipline as the demo).
-
-    network_post is high-stakes: a direct network call to a host that
-    neither the prompts nor the project config name is high severity even
-    when some other host is declared."""
+    """Envelope for a Claude Code session, from the user's prompts plus the hosts in
+    the project config. Never from tool output.
+    
+    network_post is high-stakes, so a call to any host that isn't named is high
+    even if some other host is.
+    """
     text = "\n".join(declared_prompts)
     categories = set(ALWAYS_DECLARED) | {"external_read", "external_action"}
-    # Loopback is always in scope: a call to your own machine can't send data
-    # anywhere else (real usage: checks of a local dev server were flagged).
+    # localhost is always fine; it can't send data anywhere
     named = {_domain(u) for u in _URL_RE.findall(text)} | {h.lower() for h in hosts} | LOOPBACK_HOSTS
     if named or _DOWNLOAD_WORDS_RE.search(text):
         categories.add("network_post")
-    # Every word of the prompt declares that service for external tools
-    # ("send it with gmail" -> tool:gmail:...); unmentioned services aren't.
+    # "send it with gmail" declares tool:gmail:..., unmentioned services aren't declared
     services = {f"tool:{w}:" for w in re.findall(r"[a-z0-9]{3,}", text.lower()) if w not in _GENERIC_TOKENS}
     return Envelope(
         task_id=session_id,

@@ -1,7 +1,5 @@
-"""LangGraph agent harness (Phase 0).
-
-Builds a small ReAct-style graph: call_model -> tools -> call_model -> ... -> END.
-The model is Groq (free tier), authenticated via GROQ_API_KEY.
+"""LangGraph agent: call_model -> tools -> call_model ... until the model stops.
+Runs on Groq; needs GROQ_API_KEY.
 """
 from __future__ import annotations
 
@@ -42,10 +40,7 @@ SYSTEM_PROMPT = (
     reraise=True,
 )
 def _invoke_with_retry(llm_with_tools, messages):
-    """Free tiers throw transient 429 (rate-limit) and 5xx (server overloaded)
-    errors under normal use, and the underlying httpx client can hit transient
-    DNS/connection errors; retry with backoff rather than failing the whole task
-    run over what is usually a temporary condition."""
+    """Groq's free tier throws the odd 429/5xx or connection error, so retry with backoff."""
     return llm_with_tools.invoke(messages)
 
 

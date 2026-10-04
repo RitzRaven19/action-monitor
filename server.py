@@ -1,14 +1,11 @@
-"""HTTP backend for the live console (static/).
+"""FastAPI backend for the console in static/.
 
-Wires HTTP requests to agent.live_runner.run_live, storage.db.Store, and
-judge.divergence_judge's detection layers. No monitoring logic lives here --
-each turn is judged at four scopes (this turn, this conversation, this
-identity's whole history by count, and the same history weighted by resource
-sensitivity) using the judge's own functions. With `enforce` set on a message,
-out-of-scope tool calls are blocked before they run instead of only flagged.
+Turns are run by agent.live_runner and judged with the functions in
+judge.divergence_judge at four levels: the turn, the conversation, and the
+agent's history (by count and by sensitivity). Set enforce on a message to
+block out-of-scope calls instead of only flagging them.
 
-Run with:  uvicorn server:app --reload
-Requires GROQ_API_KEY in .env (see .env.example).
+Run: uvicorn server:app --reload   (needs GROQ_API_KEY in .env)
 """
 from __future__ import annotations
 
@@ -50,16 +47,12 @@ app = FastAPI(title="Action Monitor Console API")
 
 store = Store(DB_PATH)
 
-# In-memory per-conversation state (the agent's LangGraph memory lives in the
-# checkpointer). Lost on server restart; the frontend starts a fresh
-# conversation when it gets a 404 for a thread it no longer recognizes.
+# Per-conversation state, in memory only. After a restart the frontend gets a 404
+# and starts a new conversation.
 _conversations: dict[str, dict] = {}  # thread_id -> {"checkpointer", "entity_id", "turn_index", "turn_flags", "declared_prompts", "creep_detected"}
 
 # ---------------------------------------------------------------- access gate
-# Off by default (local dev, and any deployment that doesn't set the env var
-# behaves exactly as before). Set ACCESS_PASSWORD to require it -- protects
-# the API routes only, not the static frontend shell, so a visitor without
-# the password can see the UI but can't spend Groq quota through it.
+# Set ACCESS_PASSWORD to require HTTP Basic auth on the API (not the page itself).
 _basic_auth = HTTPBasic(auto_error=False)
 
 
@@ -72,9 +65,7 @@ def require_auth(credentials: Optional[HTTPBasicCredentials] = Depends(_basic_au
 
 
 # ---------------------------------------------------------------- rate limiting
-# A minimal in-memory per-IP sliding window -- no new dependency for something
-# this small. Applied only to the one endpoint that actually spends Groq
-# quota (sending a message), not the whole API.
+# Simple per-IP sliding window, only on the endpoint that calls the model.
 RATE_LIMIT_MAX_MESSAGES = int(os.environ.get("RATE_LIMIT_MAX_MESSAGES", "10"))
 RATE_LIMIT_WINDOW_SECONDS = int(os.environ.get("RATE_LIMIT_WINDOW_SECONDS", "600"))
 _message_timestamps: dict[str, list[float]] = defaultdict(list)
@@ -108,11 +99,10 @@ def _check_token_budget() -> None:
 
 
 def _client_ip(request: Request) -> str:
-    """Who to rate-limit. Behind a reverse proxy (Render), request.client is
-    the proxy itself, so every visitor would share one budget; with
-    TRUST_PROXY_HEADERS set, use the *rightmost* X-Forwarded-For entry -- the
-    address the proxy itself saw. (Leftmost entries are client-supplied and
-    trivially forged, which is why uvicorn's trust-everything mode isn't used.)"""
+    """IP to rate-limit. Behind Render's proxy, request.client is the proxy, so with
+    TRUST_PROXY_HEADERS set we use the last X-Forwarded-For hop (what the proxy
+    saw). The first hop is client-supplied and easy to fake.
+    """
     if os.environ.get("TRUST_PROXY_HEADERS", "").strip().lower() in {"1", "true", "yes"}:
         forwarded = request.headers.get("x-forwarded-for", "")
         hops = [h.strip() for h in forwarded.split(",") if h.strip()]
@@ -249,8 +239,7 @@ def send_message(thread_id: str, body: SendMessage, request: Request):
         entity_id = conv["entity_id"]
         run_id = f"{thread_id}_{turn_index}_{uuid.uuid4().hex[:8]}"
         store.create_run(run_id, thread_id, turn_index, declared_prompt, full_prompt, enforce=body.enforce)
-        # Enforce mode escalates to blocking benign peeks too once scope creep
-        # is already on record for this conversation or (weighted) this identity.
+        # once scope creep is on record, blocking also covers low-severity calls
         escalated = conv["creep_detected"] or (
             detect_weighted_persistent_scope_creep(entity_id, store.entity_distinct_resources(entity_id)) is not None
         )

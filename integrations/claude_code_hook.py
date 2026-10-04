@@ -1,19 +1,16 @@
-"""Claude Code hook: judge (and optionally block) Claude Code's own tool calls.
+"""Claude Code hook (UserPromptSubmit + PreToolUse) that records Claude Code's tool
+calls and, with ACTION_MONITOR_ENFORCE=1, denies out-of-scope ones.
 
-Wire it to the UserPromptSubmit and PreToolUse events (see
-integrations/claude_code_settings.example.json). Each invocation is a separate
-process, so all state -- the session's prompts, earlier flags, the identity's
-footprint -- is read back from the same SQLite store the console uses; run
-`uvicorn server:app` and Claude Code sessions show up in its History tab.
+Every call is a fresh process, so state lives in the same SQLite store the
+console reads.
 
-Configuration (environment variables):
-  ACTION_MONITOR_DB        SQLite path (default: <repo>/state/console.db)
-  ACTION_MONITOR_IDENTITY  identity for persistent tracking (default: claude-code)
-  ACTION_MONITOR_ENFORCE   "1" to deny out-of-scope calls; otherwise monitor only
+Env vars:
+  ACTION_MONITOR_DB        database path (default: plugin data dir, or state/console.db)
+  ACTION_MONITOR_IDENTITY  agent name for the history checks (default: claude-code)
+  ACTION_MONITOR_ENFORCE   "1" to deny; otherwise it only records
 
-Deliberately conservative: it only ever *denies* (never auto-approves, so
-Claude Code's own permission prompts are untouched), and any internal error
-fails open -- a broken monitor must not brick the session it watches.
+It only ever denies, never approves, so Claude Code's own permission prompts
+still apply. Any error inside the hook lets the call through.
 """
 from __future__ import annotations
 
@@ -108,7 +105,7 @@ def handle(payload: dict, store: Store, identity: str, enforce: bool) -> dict | 
     )
     store.record_flag(run_id, "action", flag)
 
-    # Aggregate checks, each recorded the first time it fires in this session.
+    # pattern checks, recorded the first time each fires in a session
     flags_by_run[-1].append(flag)
     _record_once(store, session_id, run_id, "run_creep", detect_scope_creep(flags_by_run[-1], SCOPE_CREEP_THRESHOLD))
     _record_once(store, session_id, run_id, "session_creep", detect_session_scope_creep(flags_by_run, session_id))
@@ -130,9 +127,9 @@ def handle(payload: dict, store: Store, identity: str, enforce: bool) -> dict | 
 
 
 def _db_path() -> Path:
-    """ACTION_MONITOR_DB if set; else, when installed as a Claude Code plugin,
-    its persistent data directory (the plugin root is replaced on every
-    update); else this repo's state/console.db, which the local console reads."""
+    """ACTION_MONITOR_DB, else the plugin's data dir when running as a plugin
+    (the plugin folder itself gets replaced on updates), else state/console.db.
+    """
     if os.environ.get("ACTION_MONITOR_DB"):
         return Path(os.environ["ACTION_MONITOR_DB"])
     if os.environ.get("CLAUDE_PLUGIN_DATA"):

@@ -1,17 +1,8 @@
-"""Append-only action logger and tool-wrapping layer.
+"""Append-only action log, plus the wrapper that turns a function into a logged tool.
 
-Design constraint (Phase 1 of the project plan): the agent must have no code
-path that can read, modify, or suppress log entries. This is enforced by:
-
-  1. `ActionLogger._append` is the ONLY place in the codebase that opens the
-     log file for writing, and it is never exposed to the LLM.
-  2. `wrap_tool` produces a new callable that logs a record *before* deferring
-     to the real tool implementation. The agent is bound only to these
-     wrapped callables (see agent/tools.py) — it never receives a reference
-     to the raw function, the ActionLogger instance, or the log file path.
-  3. The log is append-only JSONL: each record is one `open(..., "a")` +
-     write, so there is no in-place rewrite path that could be repurposed to
-     edit or delete a prior entry.
+The agent can't read, change or skip log entries: it only ever gets the
+wrapped tools, never the logger, the raw function or the log path, and the
+log is append-only JSONL (each record is a single append).
 """
 from __future__ import annotations
 
@@ -39,7 +30,7 @@ class ActionRecord:
 
 
 class ActionLogger:
-    """Append-only action log backed by a JSONL file."""
+    """Append-only JSONL log of tool calls."""
 
     def __init__(self, log_path: Path):
         self._log_path = Path(log_path)
@@ -86,15 +77,10 @@ def wrap_tool(
     resource_fn: Callable[[dict], str],
     gate: Gate | None = None,
 ) -> Callable[..., str]:
-    """Return a callable that logs every invocation of `func` to `logger`.
-
-    This is the ONLY sanctioned way a tool becomes agent-callable in this
-    project (see agent/tools.py::build_tools). `func` itself, `logger`, the
-    log file path, and `gate` are never handed to the agent.
-
-    `gate` (enforce mode) is consulted before `func` runs: if it returns a
-    reason, `func` is never called, the attempt is still logged (outcome
-    "blocked: <reason>"), and the agent gets a refusal instead of a result.
+    """Wrap func so every call is logged. This is the only way tools reach the agent.
+    
+    If gate returns a reason, func isn't called: the attempt is logged as
+    "blocked: <reason>" and the agent gets a refusal instead.
     """
 
     @functools.wraps(func)
@@ -113,10 +99,7 @@ def wrap_tool(
             logger.record(tool_name, normalized, resource, effect_type, f"error: {exc}")
             raise
 
-    # functools.wraps preserves func's real signature (via __wrapped__) so that
-    # LangChain's StructuredTool.from_function can introspect the true parameter
-    # names/types when building the tool's schema -- without this, the agent's
-    # tool calls arrive as a single opaque `args`/`kwargs` blob instead of the
-    # named parameters (e.g. `path`), and every tool call fails.
+    # functools.wraps keeps func's signature, which LangChain needs to build the
+    # tool schema. Without it the arguments arrive as one opaque blob.
     wrapped.__name__ = tool_name
     return wrapped

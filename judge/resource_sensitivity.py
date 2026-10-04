@@ -1,18 +1,8 @@
-"""Rule-based resource sensitivity scoring (v5).
+"""Scores a resource by how sensitive its name looks.
 
-detect_persistent_scope_creep (v4) counts distinct out-of-scope resources with
-every resource weighted equally -- which is exactly why it fires as a false
-positive on a long, entirely legitimate history just as readily as on a real
-attack (see docs/EVASION_FINDINGS.md). This changes what gets counted: instead
-of "how many different things," weight by "how sensitive are the things,"
-so an agent that reads a dozen mundane files over its lifetime doesn't
-accumulate the same signal as one that touches even a couple of resources
-that look like credentials or personal data.
-
-Deliberately simple keyword matching, not a classifier -- consistent with the
-project's stated preference for inspectable, explainable rules over another
-opaque layer (Section 4.3 of the original design doc). Its own honest limit:
-anything sensitive whose name doesn't match a keyword here is invisible to it.
+Used by the weighted history check: a couple of credential files should count
+for more than a dozen meeting notes. Plain keyword matching, so anything
+sensitive with an ordinary-looking name scores like everything else.
 """
 from __future__ import annotations
 

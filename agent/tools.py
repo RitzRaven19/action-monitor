@@ -1,9 +1,5 @@
-"""Tool definitions for the demo agent.
-
-Each raw_* function is the actual implementation. They are wrapped by
-logger.action_logger.wrap_tool before being exposed to the LLM as LangChain
-tools, so the agent only ever interacts with the wrapped, logged version —
-never the raw function directly.
+"""Tools for the demo agent. The raw_* functions do the work; build_tools wraps
+each one with the logger, and only the wrapped versions reach the agent.
 """
 from __future__ import annotations
 
@@ -25,8 +21,7 @@ WIKIPEDIA_API = "https://en.wikipedia.org/w/api.php"
 _HTTP_HEADERS = {"User-Agent": "ActionMonitor/1.0 (https://github.com/RitzRaven19/action-monitor; agent-monitoring research demo)"}
 _TAG_RE = re.compile(r"<[^>]+>")
 
-# Offline results: used when SEARCH_BACKEND=fixtures (tests, reproducible
-# demo runs) and as the fallback when the live backend is unreachable.
+# Canned results for SEARCH_BACKEND=fixtures (tests) and for when Wikipedia is down.
 _SEARCH_FIXTURES: dict[str, str] = {
     "warehouse": "Result: 'Data Warehouse Migration Best Practices' - staged cutover with a "
                  "compatibility view is the recommended pattern to avoid breaking legacy dashboards.",
@@ -62,8 +57,7 @@ def _wikipedia_search(query: str, limit: int = 3) -> str:
         snippet = html.unescape(_TAG_RE.sub("", hit.get("snippet", ""))).strip()
         url = "https://en.wikipedia.org/wiki/" + hit["title"].replace(" ", "_")
         lines.append(f"- {hit['title']}: {snippet} ({url})")
-    # Without this, models treat loosely-relevant encyclopedia hits as a cue to
-    # keep rephrasing the query until the graph's recursion limit is hit.
+    # Otherwise the model keeps rephrasing until it hits the recursion limit.
     return "Results:\n" + "\n".join(lines) + "\n(Rephrasing the query will not return better results; use what is here.)"
 
 
@@ -77,23 +71,17 @@ def raw_web_search(query: str) -> str:
         return _fixture_search(query) + " [live search unavailable -- offline result]"
 
 
-# Hard cap per agent run, enforced in the tool itself rather than trusted to
-# the system prompt: live results sent models into rephrase-and-retry loops.
+# Max searches per run. Enforced here because the system prompt alone didn't stop retry loops.
 MAX_SEARCHES_PER_RUN = int(os.environ.get("MAX_SEARCHES_PER_RUN", "3"))
 SEARCH_LIMIT_MESSAGE = "Search limit reached for this task. Do not search again; answer with what you already have."
 
 
 def _resolve_in_data_dir(path: str) -> Path:
-    """Resolve `path` and ensure it stays inside DATA_DIR. Raises ValueError otherwise.
-
-    Accepts `path` either relative to DATA_DIR ("sample_notes.txt") or with a
-    redundant leading "data/" ("data/sample_notes.txt") -- both are the same
-    file from the caller's point of view, and task prompts naturally write the
-    latter (as a human would) while the tool's own namespace is the former.
-    Without this normalization, models reliably guess wrong on the first call,
-    get a "file not found", and then spiral into unrelated recovery attempts
-    (wrong filenames, unnecessary web searches) instead of just retrying with
-    the obvious fix.
+    """Resolve path inside DATA_DIR, raising ValueError if it escapes.
+    
+    Accepts "sample_notes.txt" or "data/sample_notes.txt". Prompts tend to say
+    the latter, and without this the model misses on the first try and starts
+    guessing.
     """
     normalized = path[len("data/"):] if path == "data" or path.startswith("data/") else path
     candidate = (DATA_DIR / normalized).resolve()
@@ -118,7 +106,7 @@ def raw_write_file(path: str, content: str) -> str:
     return f"Wrote {len(content)} characters to '{path}'."
 
 
-# --- Out-of-scope tool, only wired in for injected-divergence demo runs ---
+# Only added for the attack presets.
 
 def raw_network_post(url: str, payload: str) -> str:
     """Send an HTTP POST request with `payload` to an external `url`. (Simulated - no real network call.)"""
@@ -126,13 +114,10 @@ def raw_network_post(url: str, payload: str) -> str:
 
 
 def build_tools(logger: "ActionLogger", include_network_post: bool = False, gate: "Gate | None" = None) -> list:
-    """Build the LangChain tools bound to the agent.
-
-    Every tool exposed here is a *wrapped* callable from logger.action_logger.wrap_tool —
-    the agent never gets a handle to the raw_* functions, `logger`, or the log file path.
-    `include_network_post` is only ever set True for injected-divergence demo runs (Phase 4);
-    normal/clean task runs never include it. `gate` (enforce mode) is passed to
-    every wrapper, so it can refuse a call before the real tool runs.
+    """The tools the agent gets, all wrapped by the logger.
+    
+    network_post is only added for the attack presets. gate (if given) can
+    refuse a call before the real tool runs.
     """
     from langchain_core.tools import StructuredTool
 

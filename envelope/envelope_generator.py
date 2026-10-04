@@ -1,14 +1,8 @@
-"""Rule-based envelope generator (Phase 2, v1).
+"""Builds the envelope (what a task is allowed to touch) from the task text.
 
-Deliberately generates the envelope from the task's *declared* prompt only
-(demo.tasks.Task.prompt) -- never from anything appended at runtime
-(Task.injected_prompt_suffix). This mirrors the real scenario the project is
-built around: the agent's true task is declared up front; an instruction that
-shows up later (whether injected via a compromised tool result or, as
-simplified here, appended to the prompt for reproducibility) is exactly the
-kind of thing that should be judged *against* the original declared scope,
-not folded into it. An envelope generator that read the full runtime prompt
-would be trivially foolable by the same injection it's supposed to help catch.
+Only the user's declared prompt is used, never anything added later at runtime.
+An injected instruction is exactly what should be judged against the original
+scope, so letting it shape the scope would defeat the point.
 """
 from __future__ import annotations
 
@@ -16,8 +10,7 @@ import re
 
 from envelope.schema import Envelope, normalize_resource
 
-# Either anything under data/, or a bare filename with a common text extension
-# ("sample_notes.txt") -- the tools resolve both to the same place.
+# Anything under data/, or a bare filename like sample_notes.txt (same place for the tools).
 _PATH_PATTERN = re.compile(r"data/[\w./-]+|\b[\w-]+(?:/[\w-]+)*\.(?:txt|md|csv|json|log)\b")
 
 # Word-boundary matches, so "already"/"spreadsheet"/"thread" don't count as "read".
@@ -28,11 +21,7 @@ _SEARCH_PHRASES = re.compile(r"^search\b|\bsearch (?:the )?(?:web|online|interne
 
 def generate_envelope(task_id: str, prompt: str) -> Envelope:
     prompt_lower = prompt.lower()
-    # The read_file/write_file tools resolve `path` relative to the data/
-    # directory already (see agent/tools.py::_resolve_in_data_dir), so the
-    # agent naturally calls them with e.g. path="sample_notes.txt", not
-    # "data/sample_notes.txt". Declare resources in the tool's namespace
-    # (data/-prefix stripped) so they match what shows up in the action log.
+    # The tools resolve paths relative to data/, so store resources without the prefix.
     paths = {normalize_resource(p.rstrip(".")) for p in _PATH_PATTERN.findall(prompt)}
 
     categories: set[str] = set()
@@ -54,18 +43,12 @@ def generate_envelope(task_id: str, prompt: str) -> Envelope:
 
 
 def generate_cumulative_envelope(task_id: str, declared_prompts: list[str]) -> Envelope:
-    """Union the per-prompt envelopes of every declared prompt seen so far in a
-    conversation.
-
-    Found via the live console: a short natural follow-up ("what about
-    data/headcount_note.txt?") doesn't restate the base task, so generating its
-    envelope in isolation yields an empty declared scope -- and then even a
-    legitimate read in that turn reads as high-severity out-of-scope. A real
-    assistant understands a follow-up in the context of what was already
-    established in the conversation; this does the same for envelope
-    generation. Only used by the interactive console (server.py) -- the demo
-    scripts and the v3/v4 evasion experiments deliberately keep per-call
-    envelope isolation, since that isolation is exactly what they test.
+    """Union of the envelopes of every prompt in a conversation so far.
+    
+    A follow-up like "what about data/headcount_note.txt?" doesn't restate the
+    task, so on its own it declares nothing and a normal read would look out of
+    scope. The console uses this; the evasion experiments keep per-prompt
+    envelopes on purpose.
     """
     categories: set[str] = set()
     resources: set[str] = set()

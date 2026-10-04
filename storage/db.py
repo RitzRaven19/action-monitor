@@ -1,13 +1,8 @@
-"""SQLite-backed store for the interactive app's own memory: sessions, turns,
-the actions/flags recorded within them, and each identity's cumulative
-resource footprint (the persistent-tracking table).
+"""SQLite store behind the console: sessions, turns, tool calls, flags, each
+agent's footprint, and daily token usage.
 
-Deliberately separate from logger.action_logger.ActionLogger, which is a
-different thing with a different job: ActionLogger is the agent-blind
-wiretap the whole project's security guarantee rests on (see
-tests/test_no_agent_control.py) and stays untouched. This store is additive
--- a browsable "case file" the app writes to *after* the wiretap has already
-recorded what really happened, not a replacement for it.
+This is the browsable history. The ActionLogger is the separate, agent-proof
+record of what actually happened; this store is written after it.
 """
 from __future__ import annotations
 
@@ -83,7 +78,7 @@ class Store:
         self._path.parent.mkdir(parents=True, exist_ok=True)
         with self._connect() as conn:
             conn.executescript(SCHEMA)
-            # Databases created before enforce mode existed lack this column.
+            # older databases don't have this column yet
             run_columns = {row["name"] for row in conn.execute("PRAGMA table_info(runs)")}
             if "enforce" not in run_columns:
                 conn.execute("ALTER TABLE runs ADD COLUMN enforce INTEGER NOT NULL DEFAULT 0")
@@ -152,7 +147,7 @@ class Store:
                 (run_id, scope, flag.tool_name, flag.resource, flag.classification, flag.severity, flag.reason),
             )
 
-    # --- per-session readback (for callers with no in-memory state, e.g. hooks) ---
+    # --- per-session readback (the hook has no in-memory state) ---
 
     def session_runs(self, session_id: str) -> list[dict]:
         with self._connect() as conn:
@@ -163,8 +158,7 @@ class Store:
         return [dict(r) for r in rows]
 
     def session_flags_by_run(self, session_id: str, scope: str = "action") -> list[list[Flag]]:
-        """Every run's flags of one scope, in turn order -- the input shape
-        detect_session_scope_creep expects."""
+        """Flags of one scope for each run, in turn order (what detect_session_scope_creep takes)."""
         with self._connect() as conn:
             rows = conn.execute(
                 "SELECT r.run_id, f.tool_name, f.resource, f.classification, f.severity, f.reason "
@@ -220,9 +214,7 @@ class Store:
         return [r["resource"] for r in rows]
 
     def reset_entity(self, entity_id: str) -> None:
-        """Clear one entity's persistent-tracking history. Sessions/runs/actions/
-        flags already recorded are untouched -- this only resets the cumulative
-        distinct-resource count detect_persistent_scope_creep reads from."""
+        """Forget one agent's footprint. Recorded sessions, calls and flags stay."""
         with self._connect() as conn:
             conn.execute("DELETE FROM entity_resources WHERE entity_id = ?", (entity_id,))
 

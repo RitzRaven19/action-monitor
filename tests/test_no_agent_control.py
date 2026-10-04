@@ -1,6 +1,4 @@
-"""Phase 1 acceptance test: the agent has no code path that can read, modify,
-or suppress entries in the action log.
-"""
+"""The agent has no way to read, change or skip entries in the action log."""
 from pathlib import Path
 
 import pytest
@@ -25,8 +23,7 @@ def test_llm_facing_tools_are_wrapped_not_raw(tmp_path: Path):
 
 
 def test_tool_schemas_expose_no_logger_handle(tmp_path: Path):
-    """The LLM only ever sees each tool's declared parameters. None of those
-    parameters can name the logger, the log file, or a log-write API."""
+    """No tool parameter can reference the logger or the log file."""
     logger = _make_logger(tmp_path)
     tools = build_tools(logger, include_network_post=True)
 
@@ -40,9 +37,7 @@ def test_tool_schemas_expose_no_logger_handle(tmp_path: Path):
 
 
 def test_write_file_cannot_target_the_log_directory(tmp_path: Path):
-    """Even the write_file tool -- the agent's only write capability -- is
-    sandboxed to data/ and cannot resolve a path outside it, so it structurally
-    cannot be used to edit or delete the action log (which lives under logs/)."""
+    """write_file can't reach the logs directory."""
     logger = _make_logger(tmp_path)
     tools = build_tools(logger)
     write_tool = next(t for t in tools if t.name == "write_file")
@@ -56,9 +51,7 @@ def test_write_file_cannot_target_the_log_directory(tmp_path: Path):
 
 
 def test_action_logger_has_single_append_path(tmp_path: Path):
-    """Structural check: ActionLogger exposes no public method that overwrites
-    or deletes existing entries -- only `record`/`_append` (append-only) and
-    `read_all` (read-only)."""
+    """The log file is only ever opened for appending, in one place."""
     logger = _make_logger(tmp_path)
     public_methods = {
         name for name in dir(logger)
@@ -68,8 +61,7 @@ def test_action_logger_has_single_append_path(tmp_path: Path):
 
 
 def test_blocked_call_never_executes_but_is_still_logged(tmp_path: Path, monkeypatch):
-    """Enforce mode: the gate refuses before the real tool runs, and the
-    attempt still lands in the agent-blind log."""
+    """A refused call never runs but still shows up in the log."""
     import agent.tools as tools_mod
 
     calls = []

@@ -22,11 +22,7 @@ def test_search_task_declares_web_search():
 
 
 def test_declared_resources_match_tool_relative_paths():
-    """The read_file/write_file tools resolve `path` relative to data/ already,
-    so the agent calls them as path='notes.txt', not 'data/notes.txt'. Declared
-    resources must be stripped of the data/ prefix so they actually match what
-    ends up in the action log (regression test for a real false-positive bug
-    found during the live demo run)."""
+    """Resources are stored without "data/", since the tools take paths relative to data/."""
     env = generate_envelope("t5", "Read data/notes.txt and summarize it.")
     assert "notes.txt" in env.allowed_resources
     assert "data/notes.txt" not in env.allowed_resources
@@ -36,18 +32,13 @@ def test_declared_resources_match_tool_relative_paths():
 
 
 def test_network_post_never_declared_from_base_prompt():
-    """Envelope generation only ever sees the declared task prompt, never an
-    injected suffix -- network_post should never appear here even though the
-    demo's injected task variants ask the agent to use it at runtime."""
+    """Only the declared prompt builds the envelope, so network_post never appears here."""
     env = generate_envelope("t4", "Read data/notes.txt and summarize it.")
     assert "network_post" not in env.allowed_tool_categories
 
 
 def test_cumulative_envelope_carries_earlier_turn_scope_forward():
-    """The live-console bug this exists to fix: a short natural follow-up
-    ("also check X") doesn't restate the base task, so its own isolated
-    envelope would declare nothing at all. The cumulative envelope must still
-    recognize read_file as in scope, because turn 1 already declared it."""
+    """A follow-up that doesn't restate the task keeps what earlier turns allowed."""
     turn1 = "Read data/notes.txt and summarize it in two sentences."
     turn2 = "What about data/other.txt?"
 
@@ -60,10 +51,7 @@ def test_cumulative_envelope_carries_earlier_turn_scope_forward():
 
 
 def test_cumulative_envelope_still_excludes_never_declared_categories():
-    """Accumulating scope across turns must not become "declare everything
-    eventually" -- a category never mentioned in any turn's own text stays
-    undeclared, so a genuine out-of-scope action (e.g. network_post) is still
-    caught even deep into a long conversation."""
+    """Accumulating across turns doesn't end up allowing everything."""
     turns = [
         "Read data/notes.txt and summarize it.",
         "Also check data/other.txt for context.",
@@ -93,8 +81,7 @@ def test_bare_filename_is_recognized_as_a_resource():
 
 
 def test_declared_file_does_not_cover_similarly_named_files():
-    """Exact (normalized) matching, not substring: declaring notes.txt must
-    not silently also declare old_notes.txt."""
+    """notes.txt doesn't also cover old_notes.txt."""
     env = generate_envelope("t", "Read data/notes.txt.")
     assert not env.resource_is_declared("old_notes.txt")
     assert not env.resource_is_declared("data/notes.txt.bak")

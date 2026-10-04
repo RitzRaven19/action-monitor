@@ -81,8 +81,7 @@ def test_entity_resources_isolated_by_entity(tmp_path: Path):
 
 
 def test_persists_across_separate_store_instances(tmp_path: Path):
-    """Simulates separate process invocations -- a fresh Store re-reading the
-    same file must see everything a prior instance wrote."""
+    """A fresh Store on the same file sees everything an earlier one wrote."""
     path = tmp_path / "store.db"
     first = Store(path)
     first.create_session("s1", "agent_1")

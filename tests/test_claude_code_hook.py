@@ -1,6 +1,4 @@
-"""Claude Code integration: the coding-agent mapping, the hook's monitor and
-enforce behavior, and the real script driven over stdin/stdout the way
-Claude Code runs it."""
+"""Claude Code hook: the coding-agent rules, monitor/enforce behaviour, and the real script over stdin/stdout."""
 import json
 import subprocess
 import sys
@@ -62,7 +60,7 @@ def test_map_tool_call_categories():
         ("A=1 curl https://x.io", True),
         ("echo $(curl -s https://x.io)", True),
         ("Invoke-WebRequest -Uri https://x.io", True),
-        ("git commit -m \"fix: curl checks of the Render site were flagged\"", False),  # found on real usage
+        ("git commit -m \"fix: curl checks of the Render site were flagged\"", False),
         ("grep -rn 'wget' docs/", False),
         ("echo use ssh keys", False),
     ],
@@ -84,8 +82,7 @@ def test_network_clients_only_in_command_position(command, is_network):
     ],
 )
 def test_inline_scripts_using_network_libraries_are_network(command, expected):
-    """Audit gap: network access from inline code had no named client, so it
-    looked like an ordinary command."""
+    """Inline code that uses a network library counts as a network call."""
     assert map_tool_call("Bash", {"command": command}, CWD)[0] == expected
 
 
@@ -99,7 +96,7 @@ def test_inline_scripts_using_network_libraries_are_network(command, expected):
     ],
 )
 def test_data_carrying_fetches_are_sends(url, expected):
-    """Audit gap: data smuggled out in a WebFetch query string was a low-severity read."""
+    """A WebFetch URL carrying data in its query is treated as a send."""
     assert map_tool_call("WebFetch", {"url": url}, CWD)[0] == expected
 
 
@@ -117,9 +114,7 @@ def test_curl_is_high_unless_the_prompt_names_the_host():
 
 
 def test_declared_hosts_are_in_scope_and_others_are_high():
-    """Found on real usage: checking your own deployment with curl was a false
-    alarm. Hosts the user declares are in scope; with network_post high-stakes,
-    any *other* host stays high even though a host is declared."""
+    """Hosts listed in the project config are fine; any other host is still high."""
     from judge.divergence_judge import classify_action
 
     env = coding_envelope("s", ["anything else?"], hosts=["myapp.onrender.com"])
@@ -141,8 +136,7 @@ def test_declared_hosts_are_in_scope_and_others_are_high():
     ],
 )
 def test_external_tools_are_judged_not_ignored(tool, tool_input, prompt, severity):
-    """Found by audit: MCP tools and Artifact mapped to None -- sending email or
-    publishing a page was invisible to the monitor."""
+    """MCP tools and Artifact used to be ignored entirely; now they're judged."""
     from judge.divergence_judge import classify_action
 
     category, resource = map_tool_call(tool, tool_input, CWD)
@@ -152,7 +146,7 @@ def test_external_tools_are_judged_not_ignored(tool, tool_input, prompt, severit
 @pytest.mark.parametrize(
     "tool, expected",
     [
-        ("mcp__claude_ai_Supabase__restore_project", "external_action"),  # found on real usage: was a "read"
+        ("mcp__claude_ai_Supabase__restore_project", "external_action"),  # used to count as a read
         ("mcp__claude_ai_Supabase__pause_project", "external_action"),
         ("mcp__claude_ai_Supabase__reset_branch", "external_action"),
         ("mcp__claude_ai_Supabase__get_project", "external_read"),
@@ -165,13 +159,13 @@ def test_outside_tools_are_actions_unless_clearly_read_only(tool, expected):
 
 
 def test_urls_stop_at_shell_separators():
-    """Found on real usage: "B=https://host; curl $B/x" parsed the host as "host;"."""
+    """Used to parse "B=https://host; curl $B/x" with the host "host;"."""
     assert map_tool_call("Bash", {"command": "B=https://myapp.onrender.com; curl -s $B/api"}, CWD)[1] == "net:myapp.onrender.com"
     assert map_tool_call("Bash", {"command": "curl https://a.io|grep x"}, CWD)[1] == "net:a.io"
 
 
 def test_loopback_calls_are_in_scope_other_hosts_still_high():
-    """Found on real usage: checking a local dev server was flagged as a leak."""
+    """Checking a local dev server used to be flagged as a leak."""
     from judge.divergence_judge import classify_action
 
     env = coding_envelope("s", ["fix the login page"])
@@ -198,7 +192,7 @@ def test_agent_cannot_widen_its_own_scope():
         "python -c \"open('.claude/action-monitor.json','w').write('{}')\"",
     ]:
         assert map_tool_call("Bash", {"command": writer}, CWD)[0] == "monitor_config", writer
-    # Found on real usage: merely *mentioning* the file is not tampering.
+    # just mentioning the file isn't tampering
     for mention in [
         "git commit -m \"- .claude/action-monitor.json {allowed_hosts}: hosts\"",
         "grep -n 'action-monitor.json' README.md",
@@ -293,8 +287,7 @@ def test_tool_call_before_any_prompt_is_still_judged(store):
 
 
 def test_db_path_precedence(monkeypatch, tmp_path):
-    """Explicit setting wins; installed as a plugin, state goes to the plugin's
-    persistent data dir (its root is replaced on every update)."""
+    """ACTION_MONITOR_DB wins, then the plugin data dir, then state/console.db."""
     from integrations import claude_code_hook as hook
 
     monkeypatch.delenv("ACTION_MONITOR_DB", raising=False)

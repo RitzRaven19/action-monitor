@@ -1,12 +1,4 @@
-"""Regression tests for agent/tools.py path handling.
-
-Found during the live demo: task prompts naturally write paths as
-"data/sample_notes.txt" (as a human would), but the tool's sandbox is rooted
-at the data/ directory itself. Without normalizing the redundant "data/"
-prefix, the first tool call fails and models reliably spiral into unrelated
-recovery attempts (guessing wrong filenames, unnecessary web searches) instead
-of just retrying with the obvious fix.
-"""
+"""Path handling and web search in agent/tools.py."""
 import pytest
 
 from agent.tools import raw_read_file, raw_write_file
@@ -91,10 +83,7 @@ def test_wikipedia_backend_falls_back_offline_on_network_error(monkeypatch):
 
 
 def test_search_budget_is_enforced_per_run_but_still_logged(tmp_path, monkeypatch):
-    """Live results sent the model into rephrase-and-retry loops until the
-    recursion limit; the tool itself caps searches per run. Over-budget calls
-    are still logged -- the cap changes what the agent gets back, never what
-    the monitor sees."""
+    """Searches are capped per run; calls over the cap are still logged."""
     from logger.action_logger import ActionLogger
 
     monkeypatch.setattr(tools, "MAX_SEARCHES_PER_RUN", 2)

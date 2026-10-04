@@ -1,5 +1,4 @@
-"""Session harness: each monitor level fires where it should and nowhere
-else, on abstract pre-labelled fixtures (placeholder resources only)."""
+"""Session harness: each check fires where it should, on small placeholder cases."""
 import json
 
 from eval.session_harness import build_report, score_case

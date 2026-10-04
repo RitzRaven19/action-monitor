@@ -1,10 +1,5 @@
-"""The engine behind server.py, separated from the HTTP layer so it can be tested
-without a browser: streams a task through the real agent, yielding each
-action's judge verdict as it's logged, then a final summary.
-
-Kept UI-framework-agnostic on purpose -- server.py streams these events to
-the browser; scripts/smoke_test_live_runner.py consumes the same generator to
-verify every preset works end to end with no UI involved at all.
+"""Runs one turn through the agent and yields events as tool calls are logged.
+Kept separate from the HTTP layer so scripts can drive it directly.
 """
 from __future__ import annotations
 
@@ -58,32 +53,18 @@ def run_live(
     max_tokens: int | None = None,
     on_usage=None,
 ) -> Iterator[LiveEvent]:
-    """Stream a task through the real agent. Yields ActionEvent as each tool
-    call lands in the log, then CreepEvent if the scope-creep pass fires, then
-    exactly one DoneEvent with the final visible text and the full flag list.
-
-    `declared_prompt` drives envelope generation (Section 5.3: the envelope
-    only ever sees the declared task, never anything appended at runtime);
-    `full_prompt` is what's actually sent to the agent. If `envelope` is not
-    given, one is generated from `declared_prompt` alone (unchanged, isolated
-    behavior -- what every demo script and the v3/v4 evasion experiments
-    still use). A caller running a multi-turn conversation should instead
-    pass envelope.envelope_generator.generate_cumulative_envelope's result,
-    built from every turn's declared_prompt so far -- otherwise a short
-    natural follow-up ("also check X") gets its own empty envelope and even a
-    legitimate action in that turn reads as high-severity out-of-scope.
-
-    For a single-shot run (the default), leave `checkpointer`/`thread_id`
-    unset -- behavior is unchanged from before multi-turn support existed.
-    For a multi-turn conversation, pass the same `checkpointer` and
-    `thread_id` across calls and set `include_system_prompt=False` after the
-    first turn -- LangGraph's own checkpointer merges each new turn's message
-    onto that thread's persisted history, so only the new message is sent.
-
-    `enforce=True` blocks tool calls before they run (see
-    judge.divergence_judge.make_enforcement_gate); `escalated` tells that gate
-    scope creep was already detected on an earlier turn. Monitor-only (the
-    default) never blocks anything.
+    """Run a turn. Yields an ActionEvent per logged tool call, a CreepEvent if
+    the run-level scope-creep check fires, then one DoneEvent.
+    
+    declared_prompt builds the envelope; full_prompt is what the agent gets
+    (they differ for the attack presets). Pass envelope to override, e.g. the
+    cumulative envelope for a multi-turn chat.
+    
+    For multi-turn, reuse the same checkpointer and thread_id and set
+    include_system_prompt=False after the first turn.
+    
+    enforce=True blocks out-of-scope calls before they run; escalated means
+    scope creep was already seen earlier in the conversation.
     """
     if envelope is None:
         envelope = generate_envelope("live_run", declared_prompt)

@@ -1,10 +1,4 @@
-"""HTTP-layer tests for server.py -- the actual gap: server.py had zero
-automated coverage before this, only manual curl smoke tests. These cover
-every endpoint (routing, validation, the Store wiring, and full streamed
-turns with only the LLM stubbed out) using FastAPI's TestClient. Real-model
-runs are covered by scripts/smoke_test_live_runner.py and
-scripts/smoke_test_memory_db.py, live, against the real API.
-"""
+"""HTTP tests for server.py. The model is replaced with a fake; real runs are in scripts/."""
 from pathlib import Path
 
 import pytest
@@ -17,10 +11,7 @@ from storage.db import Store
 
 @pytest.fixture(autouse=True)
 def isolated_store(tmp_path: Path, monkeypatch):
-    """Every test gets a fresh, temp-file-backed store, a clean conversations
-    dict, and a clean rate-limit counter -- never touches the real
-    state/console.db, and one test's data/counters can't leak into another's
-    (TestClient requests all share the same "testclient" source IP)."""
+    """Fresh temp database, conversations and rate-limit counters for every test."""
     monkeypatch.setattr(server, "store", Store(tmp_path / "test_console.db"))
     server._conversations.clear()
     server._message_timestamps.clear()
@@ -115,9 +106,7 @@ def test_rate_limit_returns_429_past_the_threshold(client, monkeypatch):
     monkeypatch.setattr(server, "RATE_LIMIT_MAX_MESSAGES", 2)
     thread_id = client.post("/api/conversations", json={}).json()["thread_id"]
 
-    # Invalid bodies (missing text/task_id) 400 quickly, with no LLM call needed,
-    # but still count against the limit -- the limiter guards the endpoint
-    # itself, not just successful runs.
+    # bad requests get a 400 without calling the model, but still count toward the limit
     r1 = client.post(f"/api/conversations/{thread_id}/messages", json={})
     r2 = client.post(f"/api/conversations/{thread_id}/messages", json={})
     r3 = client.post(f"/api/conversations/{thread_id}/messages", json={})
@@ -127,9 +116,7 @@ def test_rate_limit_returns_429_past_the_threshold(client, monkeypatch):
 
 
 def test_rate_limit_keyed_by_client_host(monkeypatch):
-    """The limiter is keyed on request.client.host directly (not a spoofable
-    header like X-Forwarded-For) -- verified at the function level rather than
-    via TestClient, which doesn't give control over the simulated peer IP."""
+    """Each IP gets its own budget."""
     monkeypatch.setattr(server, "RATE_LIMIT_MAX_MESSAGES", 1)
     server._message_timestamps.clear()
 
@@ -156,9 +143,7 @@ def test_client_ip_ignores_forwarded_header_unless_trusted(monkeypatch):
 
 
 def test_client_ip_behind_proxy_uses_rightmost_hop(monkeypatch):
-    """Behind Render every request's peer is the proxy, so without this every
-    visitor shared one budget. The rightmost X-Forwarded-For hop is what the
-    proxy saw; leftmost entries are client-supplied and forgeable."""
+    """Behind a proxy, use the last X-Forwarded-For hop; the first one is easy to fake."""
     monkeypatch.setenv("TRUST_PROXY_HEADERS", "1")
     assert server._client_ip(_fake_request("10.0.0.9", "6.6.6.6, 203.0.113.7")) == "203.0.113.7"
     assert server._client_ip(_fake_request("10.0.0.9")) == "10.0.0.9"  # no header -> peer
@@ -167,8 +152,7 @@ def test_client_ip_behind_proxy_uses_rightmost_hop(monkeypatch):
 # ---------------------------------------------------------------- access gate
 
 def test_access_gate_off_by_default(client):
-    """No ACCESS_PASSWORD set -> every existing test above already proves this,
-    but make it explicit: unauthenticated requests succeed."""
+    """No ACCESS_PASSWORD set means no auth."""
     assert client.get("/api/presets").status_code == 200
 
 
@@ -191,8 +175,7 @@ def test_access_gate_allows_correct_password(client, monkeypatch):
 
 
 def test_access_gate_ignores_username_only_checks_password(client, monkeypatch):
-    """Deliberate design: a single shared password gate, not a real user
-    system -- any username is accepted alongside the correct password."""
+    """Any username works; only the password is checked."""
     monkeypatch.setenv("ACCESS_PASSWORD", "sekrit")
     res = client.get("/api/presets", auth=("whoever", "sekrit"))
     assert res.status_code == 200
@@ -207,10 +190,7 @@ from judge.divergence_judge import classify_action, make_enforcement_gate
 
 
 def _fake_run_live(actions_per_turn):
-    """Stand-in for agent.live_runner.run_live: skips the LLM, but classifies
-    each scripted action with the real judge against the real cumulative
-    envelope server.py passes in -- so everything downstream of the model is
-    exercised for real."""
+    """Stands in for run_live without calling the model. Actions are still judged by the real classify_action."""
     turns = iter(actions_per_turn)
 
     def fake(declared_prompt, full_prompt, include_network_post, logger, *, envelope, enforce=False, escalated=False, **kwargs):
@@ -259,9 +239,7 @@ def test_full_turn_streams_envelope_actions_and_four_verdicts(client, monkeypatc
 
 
 def test_sensitive_peeks_trip_weighted_check_before_count_check(client, monkeypatch):
-    """Two out-of-scope reads -- under the count-based threshold of 3 -- but
-    one of them looks like credentials, so the v5 weighted score (1.5 + 3.0)
-    crosses its threshold of 4.0 while the v4 count check stays silent."""
+    """Two extra reads, one credential-looking: the weighted check fires (1.5 + 3.0), the count check doesn't."""
     monkeypatch.setattr(
         server,
         "run_live",
@@ -300,8 +278,7 @@ def test_follow_up_turn_uses_cumulative_envelope_and_session_check(client, monke
 
 
 def test_identity_is_pinned_to_the_conversation(client, monkeypatch):
-    """Persistent tracking goes to the identity the conversation was created
-    with -- a client can't redirect it per message."""
+    """History goes to the agent name the conversation started with, whatever a message says."""
     monkeypatch.setattr(server, "run_live", _fake_run_live([[("read_file", "other.txt")]]))
     thread_id = client.post("/api/conversations", json={"entity_id": "owner"}).json()["thread_id"]
     _send(client, thread_id, text="Read data/notes.txt.", entity_id="someone_else")
@@ -373,8 +350,7 @@ def test_monitor_mode_never_blocks(client, monkeypatch):
 
 
 def test_enforce_escalates_after_session_creep_on_an_earlier_turn(client, monkeypatch):
-    """Turn 1+2 spread 3 benign peeks (session creep fires on turn 2, nothing
-    blocked yet). On turn 3, a single benign peek is blocked straight away."""
+    """Conversation-level creep on turn 2 means a single extra read on turn 3 gets blocked."""
     monkeypatch.setattr(
         server, "run_live",
         _fake_run_live([
